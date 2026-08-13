@@ -6,6 +6,7 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
+    infoPlistPath: Sources/Info.plist
     sources:
       - path: Sources
     settings:
