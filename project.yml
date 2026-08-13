@@ -1,0 +1,22 @@
+name: SahandInfo
+options:
+  bundleIdPrefix: com.sahandinfo
+targets:
+  SahandInfo:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_NAME: "Sahand Info"
+        PRODUCT_BUNDLE_IDENTIFIER: com.sahandinfo.app
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
