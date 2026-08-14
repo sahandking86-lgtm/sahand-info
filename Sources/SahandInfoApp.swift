@@ -323,7 +323,21 @@ enum QuestionAnswerer {
             sentence: sentence
         )
     }
+static func topMatchingNotes(for question: String, in notes: [Note], limit: Int = 3) -> [Note] {
+    let rawTokens = tokenize(question)
+    let questionTokens = rawTokens.filter { !stopWords.contains($0) }
+    guard !questionTokens.isEmpty else { return [] }
+    let expandedQuestionTokens = expand(questionTokens)
 
+    let scored: [(Note, Double)] = notes.compactMap { note in
+        let noteTokens = tokenize(note.title + " " + note.body)
+        guard !noteTokens.isEmpty else { return nil }
+        let overlap = expandedQuestionTokens.intersection(Set(noteTokens)).count
+        guard overlap > 0 else { return nil }
+        return (note, Double(overlap) / Double(noteTokens.count).squareRoot())
+    }
+    return scored.sorted { $0.1 > $1.1 }.prefix(limit).map { $0.0 }
+}
     /// Picks the value out of the matched line. If the question clearly signals a
     /// specific kind of value (a date, a phone number, a price, a percentage), that
     /// exact pattern is searched for directly, wherever it sits in the line — this is
@@ -700,7 +714,7 @@ struct ChatMessage: Identifiable, Equatable {
         case plainText(String)
     }
 
-    let id = UUID()
+    var id: UUID = UUID()
     let kind: Kind
 }
 
@@ -884,36 +898,49 @@ struct AskView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    private func sendQuestion() {
-        let trimmed = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        dismissKeyboard()
-        didAsk.toggle()
-        questionText = ""
+   private func sendQuestion() {
+    let trimmed = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    dismissKeyboard()
+    didAsk.toggle()
+    questionText = ""
 
-        withAnimation(.snappy) {
-            messages.append(ChatMessage(kind: .userQuestion(trimmed)))
-        }
+    withAnimation(.snappy) {
+        messages.append(ChatMessage(kind: .userQuestion(trimmed)))
+    }
 
-        let answer = QuestionAnswerer.answer(for: trimmed, in: notesStore.notes)
-
-        switch (answer, settings.answerMode) {
-        case let (.some(result), .aiAnswer):
-            withAnimation(.snappy) {
-                messages.append(ChatMessage(kind: .answerCard(result)))
-            }
-        case let (.some(result), .jumpAndHighlight):
+    switch settings.answerMode {
+    case .jumpAndHighlight:
+        if let result = QuestionAnswerer.answer(for: trimmed, in: notesStore.notes) {
             let noteTitle = result.matchedNote.title.isEmpty ? "Untitled" : result.matchedNote.title
             withAnimation(.snappy) {
                 messages.append(ChatMessage(kind: .plainText("Found it in \"\(noteTitle)\" — opening now.")))
             }
             path.append(AskDestination(noteID: result.matchedNote.id, highlight: result.extractedAnswer))
-        case (.none, _):
+        } else {
             withAnimation(.snappy) {
                 messages.append(ChatMessage(kind: .plainText("I couldn't find an answer to that in your notes. Try different words or add more detail.")))
             }
         }
+
+    case .aiAnswer:
+        let thinkingID = UUID()
+        withAnimation(.snappy) {
+            messages.append(ChatMessage(id: thinkingID, kind: .plainText("Thinking…")))
+        }
+        let relevantNotes = QuestionAnswerer.topMatchingNotes(for: trimmed, in: notesStore.notes)
+        Task {
+            let text = relevantNotes.isEmpty
+                ? "I couldn't find any notes related to that."
+                : await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
+            if let index = messages.firstIndex(where: { $0.id == thinkingID }) {
+                withAnimation(.snappy) {
+                    messages[index] = ChatMessage(id: thinkingID, kind: .plainText(text))
+                }
+            }
+        }
     }
+}
 }
 
 struct AnswerCardView: View {
