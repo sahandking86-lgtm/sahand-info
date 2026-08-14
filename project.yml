@@ -1,6 +1,10 @@
 name: SahandInfo
 options:
   bundleIdPrefix: com.sahandinfo
+packages:
+  SwiftLlama:
+    url: https://github.com/pgorzelany/swift-llama-cpp
+    from: "1.0.0"
 targets:
   SahandInfo:
     type: application
@@ -9,6 +13,9 @@ targets:
     infoPlistPath: Sources/Info.plist
     sources:
       - path: Sources
+      - path: Resources
+    dependencies:
+      - package: SwiftLlama
     settings:
       base:
         PRODUCT_NAME: "Sahand Info"
