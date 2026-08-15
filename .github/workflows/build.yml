@@ -1,8 +1,6 @@
 name: Build IPA
-
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: macos-latest
@@ -11,12 +9,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download local AI model
+        run: |
+          mkdir -p Resources
+          curl -L -f "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf" -o Resources/model.gguf
+          ls -lh Resources/model.gguf
+
       - name: Install XcodeGen
         run: brew install xcodegen
-
       - name: Generate Xcode project
         run: xcodegen generate
-
       - name: Build unsigned app
         run: |
           xcodebuild -project SahandInfo.xcodeproj \
@@ -26,13 +28,11 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
-
       - name: Package IPA
         run: |
           mkdir -p Payload
           cp -r "build/Build/Products/Release-iphoneos/Sahand Info.app" Payload/
           zip -r SahandInfo.ipa Payload
-
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
