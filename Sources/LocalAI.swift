@@ -24,13 +24,8 @@ final class LocalAI {
             return loadError ?? "The local AI model couldn't be loaded."
         }
 
-        let context = relevantNotes.map { note -> String in
-            let title = note.title.isEmpty ? "Untitled" : note.title
-            return "Note: \(title)\n\(note.body)"
-        }.joined(separator: "\n\n")
-
         let messages = [
-            LlamaChatMessage(role: .system, content: "You answer questions using ONLY the notes provided below. If the answer isn't in the notes, say you don't know. Be brief.\n\n\(context)"),
+            LlamaChatMessage(role: .system, content: AIProtocol.systemPrompt(notes: relevantNotes)),
             LlamaChatMessage(role: .user, content: question)
         ]
 
