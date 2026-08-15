@@ -1,96 +1,93 @@
 import Foundation
 
-/// A parsed AI response: what to say back, and optionally an action to perform on the notes.
-struct AIActionResponse {
-    var reply: String
-    var action: String   // "none" | "create_note" | "update_note" | "delete_note"
-    var target: String?  // text identifying an existing note, for update/delete
-    var title: String?   // title for a new note
-    var content: String? // full body text for a new note, or the full new body for an update
-}
-
-/// One turn of prior conversation, for multi-turn follow-up context. role must be "user" or "model".
-struct ConversationTurn {
-    let role: String
-    let text: String
-}
-
-/// Shared prompt + parsing logic used by both LocalAI and OnlineAI, so both engines
-/// speak the same "protocol" and AskView only has to handle one response shape.
-enum AIProtocol {
-    static func systemPrompt(notes: [Note], notePattern: String? = nil) -> String {
-        let context = notes.map { note -> String in
-            let title = note.title.isEmpty ? "Untitled" : note.title
-            return "Title: \(title)\nBody: \(note.body)"
-        }.joined(separator: "\n\n")
-
-        let patternSection: String
-        if let notePattern, !notePattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            patternSection = "\n\nWhen creating a new note (create_note), follow this pattern/style the user prefers for their notes:\n\(notePattern)"
-        } else {
-            patternSection = ""
+enum OnlineAI {
+    static func answer(
+        question: String,
+        relevantNotes: [Note],
+        apiKey: String,
+        history: [ConversationTurn] = [],
+        notePattern: String = ""
+    ) async -> String {
+        guard !apiKey.isEmpty else {
+            return "Add your Gemini API key in Settings first."
         }
 
-        return """
-        You are an assistant inside a personal notes app. You can answer questions about the notes below, and you can also make changes to the notes when asked.
+        var contents: [[String: Any]] = history.map { turn in
+            ["role": turn.role, "parts": [["text": turn.text]]]
+        }
+        contents.append(["role": "user", "parts": [["text": question]]])
 
-        Relevant notes:
-        \(context.isEmpty ? "(no matching notes found)" : context)\(patternSection)
+        let body: [String: Any] = [
+            "contents": contents,
+            "systemInstruction": [
+                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes, notePattern: notePattern.isEmpty ? nil : notePattern)]]
+            ]
+        ]
 
-        Always respond with ONLY a single JSON object and nothing else — no explanation, no markdown code fences — matching exactly this shape:
-        {"reply": "short message to show the user", "action": "none", "target": "", "title": "", "content": ""}
-
-        Rules:
-        - "action" must be exactly one of: "none", "create_note", "update_note", "delete_note".
-        - Use "none" when the user is just asking a question. Put your answer in "reply", using ONLY the notes above. If the notes don't answer it, say so in "reply".
-        - Use "create_note" when the user asks to add/create a new note. Put a short title in "title" and the note text in "content".
-        - Use "update_note" when the user asks to change, edit, or correct something in an existing note (like a price). Put text identifying which note in "target" (e.g. words from its title), and put the ENTIRE new note body in "content" — the complete original text with the requested change applied, not just the changed part.
-        - Use "delete_note" when the user asks to delete or remove a note. Put text identifying which note in "target".
-        - If you'd use update_note or delete_note but no note above clearly matches, use "none" instead and explain in "reply" that you couldn't find that note.
-        - "reply" must always be filled in with a short, friendly confirmation of what you did, or your answer to the question.
-        - You may also be given earlier turns of this conversation. Use them to understand follow-up questions (e.g. "what about that one" or "make it 25 instead"), but the rules above still apply to every response.
-        """
-    }
-
-    static func parse(_ raw: String) -> AIActionResponse {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if text.hasPrefix("```") {
-            text = text.replacingOccurrences(of: "```json", with: "")
-            text = text.replacingOccurrences(of: "```", with: "")
-            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent") else {
+            return "Invalid API URL."
         }
 
-        guard
-            let firstBrace = text.firstIndex(of: "{"),
-            let lastBrace = text.lastIndex(of: "}"),
-            firstBrace < lastBrace
-        else {
-            return AIActionResponse(reply: text.isEmpty ? "Done." : text, action: "none", target: nil, title: nil, content: nil)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let maxAttempts = 3
+        var lastErrorMessage = "Something went wrong talking to Gemini."
+
+        for attempt in 1...maxAttempts {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    lastErrorMessage = "No response from Gemini."
+                    continue
+                }
+
+                if (200...299).contains(http.statusCode) {
+                    guard
+                        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                        let candidates = json["candidates"] as? [[String: Any]],
+                        let content = candidates.first?["content"] as? [String: Any],
+                        let parts = content["parts"] as? [[String: Any]]
+                    else {
+                        return "Couldn't parse Gemini's response."
+                    }
+
+                    let text = parts
+                        .filter { ($0["thought"] as? Bool) != true }
+                        .compactMap { $0["text"] as? String }
+                        .joined()
+
+                    guard !text.isEmpty else {
+                        return "Gemini didn't return any text."
+                    }
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+
+                // Overloaded (503) or rate-limited (429): worth a couple of retries with backoff.
+                // Anything else (bad key, malformed request, etc.) fails immediately — retrying won't help.
+                if http.statusCode == 503 || http.statusCode == 429 {
+                    lastErrorMessage = "Gemini is busy right now."
+                    if attempt < maxAttempts {
+                        let delaySeconds = UInt64(attempt) * 2
+                        try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+                        continue
+                    }
+                } else {
+                    let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+                    return "Gemini returned an error: \(message)"
+                }
+            } catch {
+                lastErrorMessage = "Network error: \(error.localizedDescription)"
+                if attempt < maxAttempts {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
+            }
         }
 
-        let jsonSubstring = text[firstBrace...lastBrace]
-
-        guard
-            let data = jsonSubstring.data(using: .utf8),
-            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return AIActionResponse(reply: text, action: "none", target: nil, title: nil, content: nil)
-        }
-
-        let rawReply = (obj["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reply = (rawReply?.isEmpty ?? true) ? "Done." : rawReply!
-
-        func nonEmpty(_ key: String) -> String? {
-            (obj[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        }
-
-        return AIActionResponse(
-            reply: reply,
-            action: (obj["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "none",
-            target: nonEmpty("target"),
-            title: nonEmpty("title"),
-            content: nonEmpty("content")
-        )
+        return "\(lastErrorMessage) Try again in a bit, or switch to offline mode in Settings."
     }
 }
