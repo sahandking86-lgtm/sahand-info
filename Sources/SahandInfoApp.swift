@@ -293,6 +293,22 @@ enum QuestionAnswerer {
         return scored.sorted { $0.1 > $1.1 }.prefix(limit).map { $0.0 }
     }
 
+    /// Finds which existing note an AI command like "update the X note" or "delete X" is referring to.
+    static func bestMatchingNote(for target: String, in notes: [Note]) -> Note? {
+        let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedTarget.isEmpty else { return nil }
+
+        if let exact = notes.first(where: { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == trimmedTarget }) {
+            return exact
+        }
+        if let contains = notes.first(where: {
+            !$0.title.isEmpty && ($0.title.lowercased().contains(trimmedTarget) || trimmedTarget.contains($0.title.lowercased()))
+        }) {
+            return contains
+        }
+        return topMatchingNotes(for: target, in: notes, limit: 1).first
+    }
+
     static func answer(for question: String, in notes: [Note]) -> AnswerResult? {
         let rawTokens = tokenize(question)
         let questionTokens = rawTokens.filter { !stopWords.contains($0) }
@@ -948,17 +964,44 @@ struct AskView: View {
             }
             let relevantNotes = QuestionAnswerer.topMatchingNotes(for: trimmed, in: notesStore.notes)
             Task {
-                let text: String
-                if relevantNotes.isEmpty {
-                    text = "I couldn't find any notes related to that."
-                } else if settings.useOnlineAI {
-                    text = await OnlineAI.answer(question: trimmed, relevantNotes: relevantNotes, apiKey: settings.deepSeekAPIKey)
-                } else {
-                    text = await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
+                let rawText = settings.useOnlineAI
+                    ? await OnlineAI.answer(question: trimmed, relevantNotes: relevantNotes, apiKey: settings.deepSeekAPIKey)
+                    : await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
+
+                let parsed = AIProtocol.parse(rawText)
+                var replyText = parsed.reply
+
+                switch parsed.action {
+                case "create_note":
+                    let title = (parsed.title?.isEmpty == false) ? parsed.title! : "Untitled"
+                    notesStore.add(Note(title: title, body: parsed.content ?? ""))
+
+                case "update_note":
+                    if let targetText = parsed.target,
+                       let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
+                        var updated = match
+                        updated.body = parsed.content ?? match.body
+                        updated.dateModified = Date()
+                        notesStore.update(updated)
+                    } else {
+                        replyText = "I couldn't figure out which note to update. Try naming it more specifically."
+                    }
+
+                case "delete_note":
+                    if let targetText = parsed.target,
+                       let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
+                        notesStore.delete(ids: [match.id])
+                    } else {
+                        replyText = "I couldn't figure out which note to delete. Try naming it more specifically."
+                    }
+
+                default:
+                    break
                 }
+
                 if let index = messages.firstIndex(where: { $0.id == thinkingID }) {
                     withAnimation(.snappy) {
-                        messages[index] = ChatMessage(id: thinkingID, kind: .plainText(text))
+                        messages[index] = ChatMessage(id: thinkingID, kind: .plainText(replyText))
                     }
                 }
             }
@@ -1067,6 +1110,10 @@ struct SettingsView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Use online AI instead of on-device", isOn: $settings.useOnlineAI)
+
+                        Text(settings.useOnlineAI ? "Currently using: Online AI (Gemini)" : "Currently using: Offline AI (on-device)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         if settings.useOnlineAI {
                             SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
