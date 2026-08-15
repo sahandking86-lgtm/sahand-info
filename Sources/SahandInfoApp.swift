@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 // MARK: - Design System
 
@@ -13,6 +14,46 @@ extension Color {
 
     static var brandGradient: LinearGradient {
         LinearGradient(colors: [.brandStart, .brandEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+enum AppTheme: String, CaseIterable, Identifiable, Codable {
+    case classic, sunset, forest, ocean, rose
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .classic: return "Classic"
+        case .sunset: return "Sunset"
+        case .forest: return "Forest"
+        case .ocean: return "Ocean"
+        case .rose: return "Rose"
+        }
+    }
+
+    var startColor: Color {
+        switch self {
+        case .classic: return Color(red: 0.40, green: 0.36, blue: 0.98)
+        case .sunset: return Color(red: 0.98, green: 0.42, blue: 0.32)
+        case .forest: return Color(red: 0.13, green: 0.50, blue: 0.36)
+        case .ocean: return Color(red: 0.10, green: 0.50, blue: 0.78)
+        case .rose: return Color(red: 0.90, green: 0.36, blue: 0.56)
+        }
+    }
+
+    var endColor: Color {
+        switch self {
+        case .classic: return Color(red: 0.72, green: 0.34, blue: 0.86)
+        case .sunset: return Color(red: 0.98, green: 0.72, blue: 0.24)
+        case .forest: return Color(red: 0.42, green: 0.78, blue: 0.44)
+        case .ocean: return Color(red: 0.40, green: 0.80, blue: 0.86)
+        case .rose: return Color(red: 0.98, green: 0.62, blue: 0.70)
+        }
+    }
+
+    var gradient: LinearGradient {
+        LinearGradient(colors: [startColor, endColor], startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
 
@@ -157,9 +198,23 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    @Published var notePattern: String {
+        didSet {
+            UserDefaults.standard.set(notePattern, forKey: notePatternStorageKey)
+        }
+    }
+
+    @Published var theme: AppTheme {
+        didSet {
+            UserDefaults.standard.set(theme.rawValue, forKey: themeStorageKey)
+        }
+    }
+
     private let storageKey = "sahand_info_answer_mode_v1"
     private let onlineStorageKey = "sahand_info_use_online_ai_v1"
     private let apiKeyStorageKey = "sahand_info_deepseek_api_key_v1"
+    private let notePatternStorageKey = "sahand_info_note_pattern_v1"
+    private let themeStorageKey = "sahand_info_theme_v1"
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: storageKey),
@@ -170,6 +225,13 @@ final class SettingsStore: ObservableObject {
         }
         useOnlineAI = UserDefaults.standard.bool(forKey: onlineStorageKey)
         deepSeekAPIKey = UserDefaults.standard.string(forKey: apiKeyStorageKey) ?? ""
+        notePattern = UserDefaults.standard.string(forKey: notePatternStorageKey) ?? ""
+        if let rawTheme = UserDefaults.standard.string(forKey: themeStorageKey),
+           let savedTheme = AppTheme(rawValue: rawTheme) {
+            theme = savedTheme
+        } else {
+            theme = .classic
+        }
     }
 }
 
@@ -417,6 +479,7 @@ enum QuestionAnswerer {
 
 struct NotesListView: View {
     @EnvironmentObject var notesStore: NotesStore
+    @EnvironmentObject var settings: SettingsStore
     @State private var path: [NoteDestination] = []
     @State private var searchText = ""
     @State private var didTapAdd = false
@@ -484,8 +547,8 @@ struct NotesListView: View {
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(.white)
                         .frame(width: 58, height: 58)
-                        .background(Color.brandGradient, in: Circle())
-                        .shadow(color: Color.brandEnd.opacity(0.4), radius: 12, x: 0, y: 6)
+                        .background(settings.theme.gradient, in: Circle())
+                        .shadow(color: settings.theme.endColor.opacity(0.4), radius: 12, x: 0, y: 6)
                 }
                 .padding(.trailing, 20)
                 .padding(.bottom, 20)
@@ -514,12 +577,13 @@ struct NotesListView: View {
 }
 
 struct NoteRowView: View {
+    @EnvironmentObject var settings: SettingsStore
     let note: Note
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 3)
-                .fill(Color.brandGradient)
+                .fill(settings.theme.gradient)
                 .frame(width: 4)
                 .padding(.vertical, 2)
 
@@ -551,6 +615,7 @@ struct NoteRowView: View {
 
 struct NoteDetailView: View {
     @EnvironmentObject var notesStore: NotesStore
+    @EnvironmentObject var settings: SettingsStore
     let noteID: UUID
     var highlightText: String? = nil
     var startInEditMode: Bool = false
@@ -638,7 +703,7 @@ struct NoteDetailView: View {
             // A soft fading gradient instead of a hard system Divider — feels less
             // like a form field and more like part of the note.
             LinearGradient(
-                colors: [Color.brandEnd.opacity(0.4), Color.brandStart.opacity(0.05)],
+                colors: [settings.theme.endColor.opacity(0.4), settings.theme.startColor.opacity(0.05)],
                 startPoint: .leading,
                 endPoint: .trailing
             )
@@ -678,7 +743,7 @@ struct NoteDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 LinearGradient(
-                    colors: [Color.brandEnd.opacity(0.3), Color.brandStart.opacity(0.03)],
+                    colors: [settings.theme.endColor.opacity(0.3), settings.theme.startColor.opacity(0.03)],
                     startPoint: .leading,
                     endPoint: .trailing
                 )
@@ -741,11 +806,18 @@ struct NoteDetailView: View {
 
 // MARK: - Ask tab (chat-style)
 
+enum PendingUndoAction: Equatable {
+    case restoreNote(Note)
+    case removeNote(UUID)
+}
+
 struct ChatMessage: Identifiable, Equatable {
     enum Kind: Equatable {
         case userQuestion(String)
         case answerCard(AnswerResult)
         case plainText(String)
+        case actionResult(text: String, undo: PendingUndoAction?)
+        case confirmDelete(note: Note)
     }
 
     var id: UUID = UUID()
@@ -753,6 +825,7 @@ struct ChatMessage: Identifiable, Equatable {
 }
 
 private struct ChatBubbleUser: View {
+    @EnvironmentObject var settings: SettingsStore
     let text: String
 
     var body: some View {
@@ -763,7 +836,7 @@ private struct ChatBubbleUser: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Color.brandGradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .textSelection(.enabled)
         }
     }
@@ -793,6 +866,7 @@ struct AskView: View {
     @State private var messages: [ChatMessage] = []
     @State private var path: [AskDestination] = []
     @State private var didAsk = false
+    @State private var conversationHistory: [ConversationTurn] = []
     @FocusState private var isInputFocused: Bool
 
     struct AskDestination: Hashable {
@@ -844,7 +918,7 @@ struct AskView: View {
             Spacer()
             Image(systemName: "sparkles")
                 .font(.system(size: 40))
-                .foregroundStyle(Color.brandGradient)
+                .foregroundStyle(settings.theme.gradient)
             Text("Ask your notes")
                 .font(.system(.title2, design: .rounded, weight: .bold))
             Text("Get quick answers pulled straight from what you've written.")
@@ -894,6 +968,73 @@ struct AskView: View {
             }
         case .plainText(let text):
             ChatBubbleAssistantPlain(text: text)
+        case .actionResult(let text, let undo):
+            VStack(alignment: .leading, spacing: 6) {
+                ChatBubbleAssistantPlain(text: text)
+                if let undo {
+                    HStack {
+                        Button {
+                            performUndo(undo)
+                        } label: {
+                            Label("Undo", systemImage: "arrow.uturn.backward")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        Spacer(minLength: 40)
+                    }
+                }
+            }
+        case .confirmDelete(let note):
+            VStack(alignment: .leading, spacing: 8) {
+                ChatBubbleAssistantPlain(text: "Delete \"\(note.title.isEmpty ? "Untitled" : note.title)\"? This can't be undone.")
+                HStack(spacing: 10) {
+                    Button(role: .destructive) {
+                        confirmPendingDelete(note: note, messageID: message.id)
+                    } label: {
+                        Text("Delete")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .controlSize(.small)
+
+                    Button {
+                        cancelPendingDelete(messageID: message.id)
+                    } label: {
+                        Text("Keep it")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Spacer(minLength: 24)
+                }
+            }
+        }
+    }
+
+    private func performUndo(_ undo: PendingUndoAction) {
+        switch undo {
+        case .restoreNote(let note):
+            notesStore.update(note)
+        case .removeNote(let id):
+            notesStore.delete(ids: [id])
+        }
+    }
+
+    private func confirmPendingDelete(note: Note, messageID: UUID) {
+        notesStore.delete(ids: [note.id])
+        if let index = messages.firstIndex(where: { $0.id == messageID }) {
+            withAnimation(.snappy) {
+                messages[index] = ChatMessage(id: messageID, kind: .plainText("Deleted \"\(note.title.isEmpty ? "Untitled" : note.title)\"."))
+            }
+        }
+    }
+
+    private func cancelPendingDelete(messageID: UUID) {
+        if let index = messages.firstIndex(where: { $0.id == messageID }) {
+            withAnimation(.snappy) {
+                messages[index] = ChatMessage(id: messageID, kind: .plainText("Okay, kept it."))
+            }
         }
     }
 
@@ -913,7 +1054,7 @@ struct AskView: View {
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
-                    .background(Color.brandGradient, in: Circle())
+                    .background(settings.theme.gradient, in: Circle())
             }
             .buttonStyle(.plain)
             .disabled(questionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -962,27 +1103,35 @@ struct AskView: View {
             withAnimation(.snappy) {
                 messages.append(ChatMessage(id: thinkingID, kind: .plainText("Thinking…")))
             }
-            let relevantNotes = QuestionAnswerer.topMatchingNotes(for: trimmed, in: notesStore.notes)
+            let searchSeed = (conversationHistory.suffix(2).map { $0.text } + [trimmed]).joined(separator: " ")
+            let relevantNotes = QuestionAnswerer.topMatchingNotes(for: searchSeed, in: notesStore.notes)
+            let historySnapshot = conversationHistory
             Task {
                 let rawText = settings.useOnlineAI
-                    ? await OnlineAI.answer(question: trimmed, relevantNotes: relevantNotes, apiKey: settings.deepSeekAPIKey)
+                    ? await OnlineAI.answer(question: trimmed, relevantNotes: relevantNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
                     : await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
 
                 let parsed = AIProtocol.parse(rawText)
                 var replyText = parsed.reply
+                var pendingUndo: PendingUndoAction? = nil
+                var pendingDelete: Note? = nil
 
                 switch parsed.action {
                 case "create_note":
                     let title = (parsed.title?.isEmpty == false) ? parsed.title! : "Untitled"
-                    notesStore.add(Note(title: title, body: parsed.content ?? ""))
+                    let newNote = Note(title: title, body: parsed.content ?? "")
+                    notesStore.add(newNote)
+                    pendingUndo = .removeNote(newNote.id)
 
                 case "update_note":
                     if let targetText = parsed.target,
                        let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
+                        let original = match
                         var updated = match
                         updated.body = parsed.content ?? match.body
                         updated.dateModified = Date()
                         notesStore.update(updated)
+                        pendingUndo = .restoreNote(original)
                     } else {
                         replyText = "I couldn't figure out which note to update. Try naming it more specifically."
                     }
@@ -990,7 +1139,7 @@ struct AskView: View {
                 case "delete_note":
                     if let targetText = parsed.target,
                        let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
-                        notesStore.delete(ids: [match.id])
+                        pendingDelete = match
                     } else {
                         replyText = "I couldn't figure out which note to delete. Try naming it more specifically."
                     }
@@ -999,9 +1148,19 @@ struct AskView: View {
                     break
                 }
 
+                conversationHistory.append(ConversationTurn(role: "user", text: trimmed))
+                conversationHistory.append(ConversationTurn(role: "model", text: replyText))
+                if conversationHistory.count > 20 {
+                    conversationHistory = Array(conversationHistory.suffix(20))
+                }
+
                 if let index = messages.firstIndex(where: { $0.id == thinkingID }) {
                     withAnimation(.snappy) {
-                        messages[index] = ChatMessage(id: thinkingID, kind: .plainText(replyText))
+                        if let pendingDelete {
+                            messages[index] = ChatMessage(id: thinkingID, kind: .confirmDelete(note: pendingDelete))
+                        } else {
+                            messages[index] = ChatMessage(id: thinkingID, kind: .actionResult(text: replyText, undo: pendingUndo))
+                        }
                     }
                 }
             }
@@ -1010,6 +1169,7 @@ struct AskView: View {
 }
 
 struct AnswerCardView: View {
+    @EnvironmentObject var settings: SettingsStore
     let result: AnswerResult
     let onTapNote: () -> Void
 
@@ -1017,7 +1177,7 @@ struct AnswerCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
-                    .foregroundStyle(Color.brandGradient)
+                    .foregroundStyle(settings.theme.gradient)
                 Text("Answer")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1052,6 +1212,11 @@ struct AnswerCardView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var notesStore: NotesStore
+
+    @State private var pendingExportURL: URL?
+    @State private var showingImporter = false
+    @State private var importStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -1069,7 +1234,7 @@ struct SettingsView: View {
                             HStack(alignment: .top, spacing: 14) {
                                 Image(systemName: mode == .aiAnswer ? "sparkles" : "arrow.right.circle.fill")
                                     .font(.title3)
-                                    .foregroundStyle(Color.brandEnd)
+                                    .foregroundStyle(settings.theme.endColor)
                                     .frame(width: 28)
 
                                 VStack(alignment: .leading, spacing: 4) {
@@ -1086,7 +1251,7 @@ struct SettingsView: View {
 
                                 if settings.answerMode == mode {
                                     Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(Color.brandEnd)
+                                        .foregroundStyle(settings.theme.endColor)
                                         .font(.title3)
                                 }
                             }
@@ -1094,7 +1259,7 @@ struct SettingsView: View {
                             .cardBackground()
                             .overlay(
                                 RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
-                                    .stroke(settings.answerMode == mode ? Color.brandEnd : Color.clear, lineWidth: 2)
+                                    .stroke(settings.answerMode == mode ? settings.theme.endColor : Color.clear, lineWidth: 2)
                             )
                         }
                         .buttonStyle(.plain)
@@ -1128,11 +1293,173 @@ struct SettingsView: View {
                     }
                     .padding(16)
                     .cardBackground()
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Text("Note Writing Pattern (optional)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextEditor(text: $settings.notePattern)
+                            .frame(minHeight: 90)
+                            .padding(8)
+                            .background(Color(.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                        Text("Give an example of how you like notes written, e.g. \"10/10/2025 Abc Restaurant entry = 20$\" — new notes the AI creates will follow that style. Currently used by Online AI only.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .cardBackground()
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Text("Theme")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        ForEach(AppTheme.allCases) { theme in
+                            Button {
+                                withAnimation(.snappy) { settings.theme = theme }
+                            } label: {
+                                VStack(spacing: 8) {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(theme.gradient)
+                                        .frame(height: 44)
+                                        .overlay(alignment: .topTrailing) {
+                                            if settings.theme == theme {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .foregroundStyle(.white)
+                                                    .padding(6)
+                                            }
+                                        }
+                                    Text(theme.displayName)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(.primary)
+                                }
+                                .padding(12)
+                                .cardBackground()
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
+                                        .stroke(settings.theme == theme ? theme.endColor : Color.clear, lineWidth: 2)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Text("Backup")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button {
+                            prepareExport()
+                        } label: {
+                            Label("Export All Notes", systemImage: "square.and.arrow.up")
+                        }
+
+                        if let pendingExportURL {
+                            ShareLink(item: pendingExportURL) {
+                                Label("Share Backup File", systemImage: "arrow.up.doc")
+                            }
+                        }
+
+                        Divider()
+
+                        Button {
+                            showingImporter = true
+                        } label: {
+                            Label("Import Notes", systemImage: "square.and.arrow.down")
+                        }
+
+                        Text("Export saves all your notes to a file you can AirDrop, email, or save to iCloud Drive — keep it somewhere off the phone. After a reset or reinstall, use Import and pick that file to bring everything back. Importing never deletes existing notes; it only adds new ones and updates any that match.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if let importStatusMessage {
+                            Text(importStatusMessage)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(16)
+                    .cardBackground()
                 }
                 .padding(20)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Settings")
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
+                handleImport(result)
+            }
+        }
+    }
+
+    private func prepareExport() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(notesStore.notes) else {
+            importStatusMessage = "Couldn't prepare the export file."
+            return
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let filename = "SahandInfoNotes-\(formatter.string(from: Date())).json"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        do {
+            try data.write(to: url, options: .atomic)
+            pendingExportURL = url
+            importStatusMessage = nil
+        } catch {
+            importStatusMessage = "Couldn't prepare the export file."
+        }
+    }
+
+    private func handleImport(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
+            defer { if didStartAccessing { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                let decoded = try JSONDecoder().decode([Note].self, from: data)
+                guard !decoded.isEmpty else {
+                    importStatusMessage = "That file didn't contain any notes."
+                    return
+                }
+                var addedCount = 0
+                var updatedCount = 0
+                for imported in decoded {
+                    if notesStore.notes.contains(where: { $0.id == imported.id }) {
+                        notesStore.update(imported)
+                        updatedCount += 1
+                    } else {
+                        notesStore.add(imported)
+                        addedCount += 1
+                    }
+                }
+                var summary = "Imported \(addedCount) new note\(addedCount == 1 ? "" : "s")."
+                if updatedCount > 0 {
+                    summary += " Updated \(updatedCount) existing note\(updatedCount == 1 ? "" : "s")."
+                }
+                importStatusMessage = summary
+            } catch {
+                importStatusMessage = "That file couldn't be read as a notes backup."
+            }
+        case .failure:
+            importStatusMessage = "Import was cancelled or failed."
         }
     }
 }
@@ -1140,6 +1467,8 @@ struct SettingsView: View {
 // MARK: - Root
 
 struct ContentView: View {
+    @EnvironmentObject var settings: SettingsStore
+
     var body: some View {
         TabView {
             NotesListView()
@@ -1149,7 +1478,7 @@ struct ContentView: View {
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
         }
-        .tint(Color.brandEnd)
+        .tint(settings.theme.endColor)
     }
 }
 
