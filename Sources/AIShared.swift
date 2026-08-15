@@ -9,20 +9,33 @@ struct AIActionResponse {
     var content: String? // full body text for a new note, or the full new body for an update
 }
 
+/// One turn of prior conversation, for multi-turn follow-up context. role must be "user" or "model".
+struct ConversationTurn {
+    let role: String
+    let text: String
+}
+
 /// Shared prompt + parsing logic used by both LocalAI and OnlineAI, so both engines
 /// speak the same "protocol" and AskView only has to handle one response shape.
 enum AIProtocol {
-    static func systemPrompt(notes: [Note]) -> String {
+    static func systemPrompt(notes: [Note], notePattern: String? = nil) -> String {
         let context = notes.map { note -> String in
             let title = note.title.isEmpty ? "Untitled" : note.title
             return "Title: \(title)\nBody: \(note.body)"
         }.joined(separator: "\n\n")
 
+        let patternSection: String
+        if let notePattern, !notePattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            patternSection = "\n\nWhen creating a new note (create_note), follow this pattern/style the user prefers for their notes:\n\(notePattern)"
+        } else {
+            patternSection = ""
+        }
+
         return """
         You are an assistant inside a personal notes app. You can answer questions about the notes below, and you can also make changes to the notes when asked.
 
         Relevant notes:
-        \(context.isEmpty ? "(no matching notes found)" : context)
+        \(context.isEmpty ? "(no matching notes found)" : context)\(patternSection)
 
         Always respond with ONLY a single JSON object and nothing else — no explanation, no markdown code fences — matching exactly this shape:
         {"reply": "short message to show the user", "action": "none", "target": "", "title": "", "content": ""}
@@ -35,6 +48,7 @@ enum AIProtocol {
         - Use "delete_note" when the user asks to delete or remove a note. Put text identifying which note in "target".
         - If you'd use update_note or delete_note but no note above clearly matches, use "none" instead and explain in "reply" that you couldn't find that note.
         - "reply" must always be filled in with a short, friendly confirmation of what you did, or your answer to the question.
+        - You may also be given earlier turns of this conversation. Use them to understand follow-up questions (e.g. "what about that one" or "make it 25 instead"), but the rules above still apply to every response.
         """
     }
 
@@ -73,7 +87,7 @@ enum AIProtocol {
 
         return AIActionResponse(
             reply: reply,
-            action: obj["action"] as? String ?? "none",
+            action: (obj["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "none",
             target: nonEmpty("target"),
             title: nonEmpty("title"),
             content: nonEmpty("content")
