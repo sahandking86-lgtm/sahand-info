@@ -1069,12 +1069,12 @@ struct SettingsView: View {
                         Toggle("Use online AI instead of on-device", isOn: $settings.useOnlineAI)
 
                         if settings.useOnlineAI {
-                            SecureField("DeepSeek API key", text: $settings.deepSeekAPIKey)
+                            SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
                                 .textFieldStyle(.roundedBorder)
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
 
-                            Text("Uses your own DeepSeek API key over WiFi instead of the bundled offline model. Not free — pay-per-token, very cheap, with a one-time free grant on signup.")
+                            Text("Uses your own free Gemini API key over WiFi instead of the bundled offline model. Free tier has rate limits, and Google may use free-tier requests to improve their models.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
