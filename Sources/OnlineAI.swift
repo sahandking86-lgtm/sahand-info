@@ -1,17 +1,26 @@
 import Foundation
 
 enum OnlineAI {
-    static func answer(question: String, relevantNotes: [Note], apiKey: String) async -> String {
+    static func answer(
+        question: String,
+        relevantNotes: [Note],
+        apiKey: String,
+        history: [ConversationTurn] = [],
+        notePattern: String = ""
+    ) async -> String {
         guard !apiKey.isEmpty else {
             return "Add your Gemini API key in Settings first."
         }
 
+        var contents: [[String: Any]] = history.map { turn in
+            ["role": turn.role, "parts": [["text": turn.text]]]
+        }
+        contents.append(["role": "user", "parts": [["text": question]]])
+
         let body: [String: Any] = [
-            "contents": [
-                ["role": "user", "parts": [["text": question]]]
-            ],
+            "contents": contents,
             "systemInstruction": [
-                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes)]]
+                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes, notePattern: notePattern.isEmpty ? nil : notePattern)]]
             ]
         ]
 
