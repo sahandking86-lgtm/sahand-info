@@ -145,7 +145,21 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    @Published var useOnlineAI: Bool {
+        didSet {
+            UserDefaults.standard.set(useOnlineAI, forKey: onlineStorageKey)
+        }
+    }
+
+    @Published var deepSeekAPIKey: String {
+        didSet {
+            UserDefaults.standard.set(deepSeekAPIKey, forKey: apiKeyStorageKey)
+        }
+    }
+
     private let storageKey = "sahand_info_answer_mode_v1"
+    private let onlineStorageKey = "sahand_info_use_online_ai_v1"
+    private let apiKeyStorageKey = "sahand_info_deepseek_api_key_v1"
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: storageKey),
@@ -154,6 +168,8 @@ final class SettingsStore: ObservableObject {
         } else {
             answerMode = .aiAnswer
         }
+        useOnlineAI = UserDefaults.standard.bool(forKey: onlineStorageKey)
+        deepSeekAPIKey = UserDefaults.standard.string(forKey: apiKeyStorageKey) ?? ""
     }
 }
 
@@ -261,6 +277,22 @@ enum QuestionAnswerer {
         return nil
     }
 
+    static func topMatchingNotes(for question: String, in notes: [Note], limit: Int = 3) -> [Note] {
+        let rawTokens = tokenize(question)
+        let questionTokens = rawTokens.filter { !stopWords.contains($0) }
+        guard !questionTokens.isEmpty else { return [] }
+        let expandedQuestionTokens = expand(questionTokens)
+
+        let scored: [(Note, Double)] = notes.compactMap { note in
+            let noteTokens = tokenize(note.title + " " + note.body)
+            guard !noteTokens.isEmpty else { return nil }
+            let overlap = expandedQuestionTokens.intersection(Set(noteTokens)).count
+            guard overlap > 0 else { return nil }
+            return (note, Double(overlap) / Double(noteTokens.count).squareRoot())
+        }
+        return scored.sorted { $0.1 > $1.1 }.prefix(limit).map { $0.0 }
+    }
+
     static func answer(for question: String, in notes: [Note]) -> AnswerResult? {
         let rawTokens = tokenize(question)
         let questionTokens = rawTokens.filter { !stopWords.contains($0) }
@@ -323,21 +355,7 @@ enum QuestionAnswerer {
             sentence: sentence
         )
     }
-static func topMatchingNotes(for question: String, in notes: [Note], limit: Int = 3) -> [Note] {
-    let rawTokens = tokenize(question)
-    let questionTokens = rawTokens.filter { !stopWords.contains($0) }
-    guard !questionTokens.isEmpty else { return [] }
-    let expandedQuestionTokens = expand(questionTokens)
 
-    let scored: [(Note, Double)] = notes.compactMap { note in
-        let noteTokens = tokenize(note.title + " " + note.body)
-        guard !noteTokens.isEmpty else { return nil }
-        let overlap = expandedQuestionTokens.intersection(Set(noteTokens)).count
-        guard overlap > 0 else { return nil }
-        return (note, Double(overlap) / Double(noteTokens.count).squareRoot())
-    }
-    return scored.sorted { $0.1 > $1.1 }.prefix(limit).map { $0.0 }
-}
     /// Picks the value out of the matched line. If the question clearly signals a
     /// specific kind of value (a date, a phone number, a price, a percentage), that
     /// exact pattern is searched for directly, wherever it sits in the line — this is
@@ -898,49 +916,54 @@ struct AskView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-   private func sendQuestion() {
-    let trimmed = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
-    dismissKeyboard()
-    didAsk.toggle()
-    questionText = ""
+    private func sendQuestion() {
+        let trimmed = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        dismissKeyboard()
+        didAsk.toggle()
+        questionText = ""
 
-    withAnimation(.snappy) {
-        messages.append(ChatMessage(kind: .userQuestion(trimmed)))
-    }
-
-    switch settings.answerMode {
-    case .jumpAndHighlight:
-        if let result = QuestionAnswerer.answer(for: trimmed, in: notesStore.notes) {
-            let noteTitle = result.matchedNote.title.isEmpty ? "Untitled" : result.matchedNote.title
-            withAnimation(.snappy) {
-                messages.append(ChatMessage(kind: .plainText("Found it in \"\(noteTitle)\" — opening now.")))
-            }
-            path.append(AskDestination(noteID: result.matchedNote.id, highlight: result.extractedAnswer))
-        } else {
-            withAnimation(.snappy) {
-                messages.append(ChatMessage(kind: .plainText("I couldn't find an answer to that in your notes. Try different words or add more detail.")))
-            }
-        }
-
-    case .aiAnswer:
-        let thinkingID = UUID()
         withAnimation(.snappy) {
-            messages.append(ChatMessage(id: thinkingID, kind: .plainText("Thinking…")))
+            messages.append(ChatMessage(kind: .userQuestion(trimmed)))
         }
-        let relevantNotes = QuestionAnswerer.topMatchingNotes(for: trimmed, in: notesStore.notes)
-        Task {
-            let text = relevantNotes.isEmpty
-                ? "I couldn't find any notes related to that."
-                : await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
-            if let index = messages.firstIndex(where: { $0.id == thinkingID }) {
+
+        switch settings.answerMode {
+        case .jumpAndHighlight:
+            if let result = QuestionAnswerer.answer(for: trimmed, in: notesStore.notes) {
+                let noteTitle = result.matchedNote.title.isEmpty ? "Untitled" : result.matchedNote.title
                 withAnimation(.snappy) {
-                    messages[index] = ChatMessage(id: thinkingID, kind: .plainText(text))
+                    messages.append(ChatMessage(kind: .plainText("Found it in \"\(noteTitle)\" — opening now.")))
+                }
+                path.append(AskDestination(noteID: result.matchedNote.id, highlight: result.extractedAnswer))
+            } else {
+                withAnimation(.snappy) {
+                    messages.append(ChatMessage(kind: .plainText("I couldn't find an answer to that in your notes. Try different words or add more detail.")))
+                }
+            }
+
+        case .aiAnswer:
+            let thinkingID = UUID()
+            withAnimation(.snappy) {
+                messages.append(ChatMessage(id: thinkingID, kind: .plainText("Thinking…")))
+            }
+            let relevantNotes = QuestionAnswerer.topMatchingNotes(for: trimmed, in: notesStore.notes)
+            Task {
+                let text: String
+                if relevantNotes.isEmpty {
+                    text = "I couldn't find any notes related to that."
+                } else if settings.useOnlineAI {
+                    text = await OnlineAI.answer(question: trimmed, relevantNotes: relevantNotes, apiKey: settings.deepSeekAPIKey)
+                } else {
+                    text = await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
+                }
+                if let index = messages.firstIndex(where: { $0.id == thinkingID }) {
+                    withAnimation(.snappy) {
+                        messages[index] = ChatMessage(id: thinkingID, kind: .plainText(text))
+                    }
                 }
             }
         }
     }
-}
 }
 
 struct AnswerCardView: View {
@@ -1033,6 +1056,31 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                     }
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Text("Online AI (optional)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Use online AI instead of on-device", isOn: $settings.useOnlineAI)
+
+                        if settings.useOnlineAI {
+                            SecureField("DeepSeek API key", text: $settings.deepSeekAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+
+                            Text("Uses your own DeepSeek API key over WiFi instead of the bundled offline model. Not free — pay-per-token, very cheap, with a one-time free grant on signup.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(16)
+                    .cardBackground()
                 }
                 .padding(20)
             }
