@@ -22,7 +22,7 @@ enum OnlineAI {
             ]
         ]
 
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent") else {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent") else {
             return "Invalid API URL."
         }
 
@@ -42,10 +42,18 @@ enum OnlineAI {
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let candidates = json["candidates"] as? [[String: Any]],
                 let content = candidates.first?["content"] as? [String: Any],
-                let parts = content["parts"] as? [[String: Any]],
-                let text = parts.first?["text"] as? String
+                let parts = content["parts"] as? [[String: Any]]
             else {
                 return "Couldn't parse Gemini's response."
+            }
+
+            let text = parts
+                .filter { ($0["thought"] as? Bool) != true }
+                .compactMap { $0["text"] as? String }
+                .joined()
+
+            guard !text.isEmpty else {
+                return "Gemini didn't return any text."
             }
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
