@@ -18,7 +18,7 @@ extension Color {
 }
 
 enum AppTheme: String, CaseIterable, Identifiable, Codable {
-    case classic, sunset, forest, ocean, rose
+    case classic, sunset, forest, ocean, rose, amber, mint, berry, slate, plum
 
     var id: String { rawValue }
 
@@ -29,6 +29,11 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         case .forest: return "Forest"
         case .ocean: return "Ocean"
         case .rose: return "Rose"
+        case .amber: return "Amber"
+        case .mint: return "Mint"
+        case .berry: return "Berry"
+        case .slate: return "Slate"
+        case .plum: return "Plum"
         }
     }
 
@@ -39,6 +44,11 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         case .forest: return Color(red: 0.13, green: 0.50, blue: 0.36)
         case .ocean: return Color(red: 0.10, green: 0.50, blue: 0.78)
         case .rose: return Color(red: 0.90, green: 0.36, blue: 0.56)
+        case .amber: return Color(red: 0.95, green: 0.65, blue: 0.10)
+        case .mint: return Color(red: 0.10, green: 0.70, blue: 0.55)
+        case .berry: return Color(red: 0.55, green: 0.10, blue: 0.35)
+        case .slate: return Color(red: 0.30, green: 0.36, blue: 0.44)
+        case .plum: return Color(red: 0.45, green: 0.20, blue: 0.55)
         }
     }
 
@@ -49,6 +59,11 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         case .forest: return Color(red: 0.42, green: 0.78, blue: 0.44)
         case .ocean: return Color(red: 0.40, green: 0.80, blue: 0.86)
         case .rose: return Color(red: 0.98, green: 0.62, blue: 0.70)
+        case .amber: return Color(red: 0.99, green: 0.84, blue: 0.35)
+        case .mint: return Color(red: 0.55, green: 0.92, blue: 0.78)
+        case .berry: return Color(red: 0.85, green: 0.30, blue: 0.55)
+        case .slate: return Color(red: 0.58, green: 0.66, blue: 0.74)
+        case .plum: return Color(red: 0.72, green: 0.48, blue: 0.82)
         }
     }
 
@@ -618,6 +633,7 @@ struct NoteDetailView: View {
     @EnvironmentObject var settings: SettingsStore
     let noteID: UUID
     var highlightText: String? = nil
+    var highlightColor: Color = .purple
     var startInEditMode: Bool = false
 
     @State private var isEditing = false
@@ -736,7 +752,7 @@ struct NoteDetailView: View {
                     .font(.system(.largeTitle, design: .rounded, weight: .bold))
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text(highlightedAttributedString(body: note.body, highlight: highlightText))
+                Text(highlightedAttributedString(body: note.body, highlight: highlightText, color: highlightColor))
                     .font(.body)
                     .lineSpacing(4)
                     .textSelection(.enabled)
@@ -786,7 +802,7 @@ struct NoteDetailView: View {
         notesStore.update(updated)
     }
 
-    private func highlightedAttributedString(body: String, highlight: String?) -> AttributedString {
+    private func highlightedAttributedString(body: String, highlight: String?, color: Color) -> AttributedString {
         guard let highlight, !highlight.isEmpty,
               let stringRange = body.range(of: highlight, options: [.caseInsensitive]) else {
             return AttributedString(body)
@@ -797,7 +813,7 @@ struct NoteDetailView: View {
         let suffix = String(body[stringRange.upperBound...])
 
         var matchAttr = AttributedString(match)
-        matchAttr.backgroundColor = Color.purple.opacity(0.45)
+        matchAttr.backgroundColor = color.opacity(0.45)
         matchAttr.foregroundColor = Color.primary
 
         return AttributedString(prefix) + matchAttr + AttributedString(suffix)
@@ -811,6 +827,22 @@ enum PendingUndoAction: Equatable {
     case removeNote(UUID)
 }
 
+/// A tappable chip for a note the AI drew its answer from, colored with a randomly assigned theme.
+struct SourceNoteChip: Identifiable, Equatable {
+    let id: UUID // the note's own id
+    let title: String
+    let theme: AppTheme
+}
+
+/// One piece of an AI answer, optionally tied to a source note (and colored to match its chip).
+struct ResolvedAnswerSegment: Identifiable, Equatable {
+    let id = UUID()
+    var text: String
+    var noteID: UUID?
+    var excerpt: String?
+    var theme: AppTheme?
+}
+
 struct ChatMessage: Identifiable, Equatable {
     enum Kind: Equatable {
         case userQuestion(String)
@@ -818,6 +850,7 @@ struct ChatMessage: Identifiable, Equatable {
         case plainText(String)
         case actionResult(text: String, undo: PendingUndoAction?)
         case confirmDelete(note: Note)
+        case sourcedAnswer(chips: [SourceNoteChip], segments: [ResolvedAnswerSegment])
     }
 
     var id: UUID = UUID()
@@ -872,6 +905,7 @@ struct AskView: View {
     struct AskDestination: Hashable {
         let noteID: UUID
         let highlight: String?
+        var highlightColor: Color? = nil
     }
 
     var body: some View {
@@ -896,7 +930,7 @@ struct AskView: View {
             .navigationTitle("Ask")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AskDestination.self) { dest in
-                NoteDetailView(noteID: dest.noteID, highlightText: dest.highlight)
+                NoteDetailView(noteID: dest.noteID, highlightText: dest.highlight, highlightColor: dest.highlightColor ?? .purple)
             }
             .toolbar {
                 if !messages.isEmpty {
@@ -904,7 +938,7 @@ struct AskView: View {
                         Button(role: .destructive) {
                             withAnimation(.snappy) { messages.removeAll() }
                         } label: {
-                            Image(systemName: "trash")
+                            Image(systemName: "xmark.circle")
                         }
                     }
                 }
@@ -1009,7 +1043,58 @@ struct AskView: View {
                     Spacer(minLength: 24)
                 }
             }
+        case .sourcedAnswer(let chips, let segments):
+            VStack(alignment: .leading, spacing: 10) {
+                if !chips.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(chips) { chip in
+                                Button {
+                                    openSourceNote(chip: chip, segments: segments)
+                                } label: {
+                                    Text(chip.title)
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(chip.theme.gradient, in: Capsule())
+                                        .foregroundStyle(.white)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.leading, 16)
+                    }
+                }
+
+                HStack {
+                    sourcedAnswerText(segments: segments)
+                        .font(.body)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .textSelection(.enabled)
+                    Spacer(minLength: 24)
+                }
+            }
         }
+    }
+
+    private func sourcedAnswerText(segments: [ResolvedAnswerSegment]) -> Text {
+        var result = AttributedString("")
+        for segment in segments {
+            var attr = AttributedString(segment.text)
+            if let theme = segment.theme {
+                attr.backgroundColor = theme.startColor.opacity(0.35)
+                attr.foregroundColor = Color.primary
+            }
+            result += attr
+        }
+        return Text(result)
+    }
+
+    private func openSourceNote(chip: SourceNoteChip, segments: [ResolvedAnswerSegment]) {
+        let excerpt = segments.first(where: { $0.noteID == chip.id })?.excerpt
+        path.append(AskDestination(noteID: chip.id, highlight: excerpt, highlightColor: chip.theme.startColor))
     }
 
     private func performUndo(_ undo: PendingUndoAction) {
@@ -1115,6 +1200,7 @@ struct AskView: View {
                 var replyText = parsed.reply
                 var pendingUndo: PendingUndoAction? = nil
                 var pendingDelete: Note? = nil
+                var sourcedKind: ChatMessage.Kind? = nil
 
                 switch parsed.action {
                 case "create_note":
@@ -1145,7 +1231,7 @@ struct AskView: View {
                     }
 
                 default:
-                    break
+                    sourcedKind = buildSourcedAnswerKind(parsed: parsed, replyText: replyText)
                 }
 
                 conversationHistory.append(ConversationTurn(role: "user", text: trimmed))
@@ -1158,6 +1244,8 @@ struct AskView: View {
                     withAnimation(.snappy) {
                         if let pendingDelete {
                             messages[index] = ChatMessage(id: thinkingID, kind: .confirmDelete(note: pendingDelete))
+                        } else if let sourcedKind {
+                            messages[index] = ChatMessage(id: thinkingID, kind: sourcedKind)
                         } else {
                             messages[index] = ChatMessage(id: thinkingID, kind: .actionResult(text: replyText, undo: pendingUndo))
                         }
@@ -1165,6 +1253,50 @@ struct AskView: View {
                 }
             }
         }
+    }
+
+    /// Tries to build a colored, source-attributed answer from the AI's segments.
+    /// Falls back to nil (plain text) if the segments don't reconstruct the reply exactly,
+    /// or don't resolve to any real notes — so a slip-up from the AI never breaks the answer.
+    private func buildSourcedAnswerKind(parsed: AIActionResponse, replyText: String) -> ChatMessage.Kind? {
+        guard !parsed.segments.isEmpty else { return nil }
+
+        let reconstructed = parsed.segments.map(\.text).joined()
+        guard reconstructed.trimmingCharacters(in: .whitespacesAndNewlines) == replyText.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return nil
+        }
+
+        var seenTitles: [String] = []
+        for segment in parsed.segments {
+            if let title = segment.sourceNote, !title.isEmpty, !seenTitles.contains(title) {
+                seenTitles.append(title)
+            }
+        }
+        guard !seenTitles.isEmpty else { return nil }
+
+        var pool = AppTheme.allCases.filter { $0 != settings.theme }.shuffled()
+        if pool.isEmpty { pool = AppTheme.allCases.shuffled() }
+
+        var titleToTheme: [String: AppTheme] = [:]
+        var titleToNoteID: [String: UUID] = [:]
+        var chips: [SourceNoteChip] = []
+
+        for (index, title) in seenTitles.enumerated() {
+            guard let note = QuestionAnswerer.bestMatchingNote(for: title, in: notesStore.notes) else { continue }
+            let theme = pool[index % pool.count]
+            titleToTheme[title] = theme
+            titleToNoteID[title] = note.id
+            chips.append(SourceNoteChip(id: note.id, title: note.title.isEmpty ? "Untitled" : note.title, theme: theme))
+        }
+        guard !chips.isEmpty else { return nil }
+
+        let resolvedSegments: [ResolvedAnswerSegment] = parsed.segments.map { segment in
+            let noteID = segment.sourceNote.flatMap { titleToNoteID[$0] }
+            let theme = segment.sourceNote.flatMap { titleToTheme[$0] }
+            return ResolvedAnswerSegment(text: segment.text, noteID: noteID, excerpt: segment.sourceExcerpt, theme: noteID != nil ? theme : nil)
+        }
+
+        return .sourcedAnswer(chips: chips, segments: resolvedSegments)
     }
 }
 
