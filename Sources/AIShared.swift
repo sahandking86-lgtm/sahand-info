@@ -7,6 +7,14 @@ struct AIActionResponse {
     var target: String?  // text identifying an existing note, for update/delete
     var title: String?   // title for a new note
     var content: String? // full body text for a new note, or the full new body for an update
+    var segments: [AISegment] = [] // reply broken into pieces tagged by source note, for "none" answers
+}
+
+/// One piece of a "none"-action reply, optionally tied to the note it came from.
+struct AISegment: Equatable {
+    var text: String
+    var sourceNote: String?    // title of the note this piece of text came from, if any
+    var sourceExcerpt: String? // the exact original line/phrase in that note, for jump-to-highlight
 }
 
 /// One turn of prior conversation, for multi-turn follow-up context. role must be "user" or "model".
@@ -38,7 +46,7 @@ enum AIProtocol {
         \(context.isEmpty ? "(no matching notes found)" : context)\(patternSection)
 
         Always respond with ONLY a single JSON object and nothing else — no explanation, no markdown code fences — matching exactly this shape:
-        {"reply": "short message to show the user", "action": "none", "target": "", "title": "", "content": ""}
+        {"reply": "short message to show the user", "action": "none", "target": "", "title": "", "content": "", "segments": []}
 
         Rules:
         - "action" must be exactly one of: "none", "create_note", "update_note", "delete_note".
@@ -49,6 +57,8 @@ enum AIProtocol {
         - If you'd use update_note or delete_note but no note above clearly matches, use "none" instead and explain in "reply" that you couldn't find that note.
         - "reply" must always be filled in with a short, friendly confirmation of what you did, or your answer to the question.
         - You may also be given earlier turns of this conversation. Use them to understand follow-up questions (e.g. "what about that one" or "make it 25 instead"), but the rules above still apply to every response.
+
+        For "segments" (ONLY when action is "none"): break your "reply" text into an ordered list of pieces that, joined together with nothing in between, reconstruct "reply" EXACTLY, character for character. Each piece is an object: {"text": "the piece of the reply", "source_note": "exact title of the note this piece is based on, or empty if it's not tied to a specific note (like a greeting or connecting words)", "source_excerpt": "the exact original line or phrase from that note that supports this piece, copied verbatim, or empty if source_note is empty"}. If your reply draws on multiple notes, give each fact its own segment tagged with its own note. If the reply doesn't draw on any note content (or the action isn't "none"), just use an empty array for "segments".
         """
     }
 
@@ -85,12 +95,20 @@ enum AIProtocol {
             (obj[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
         }
 
+        let segments: [AISegment] = (obj["segments"] as? [[String: Any]])?.compactMap { entry in
+            guard let text = entry["text"] as? String, !text.isEmpty else { return nil }
+            let sourceNote = (entry["source_note"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let sourceExcerpt = (entry["source_excerpt"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return AISegment(text: text, sourceNote: sourceNote, sourceExcerpt: sourceExcerpt)
+        } ?? []
+
         return AIActionResponse(
             reply: reply,
             action: (obj["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "none",
             target: nonEmpty("target"),
             title: nonEmpty("title"),
-            content: nonEmpty("content")
+            content: nonEmpty("content"),
+            segments: segments
         )
     }
 }
