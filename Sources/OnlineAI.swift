@@ -20,7 +20,7 @@ enum OnlineAI {
         let body: [String: Any] = [
             "contents": contents,
             "systemInstruction": [
-                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes, notePattern: notePattern.isEmpty ? nil : notePattern)]]
+                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes, notePattern: notePattern.isEmpty ? nil : notePattern, includeCategoryTagging: true)]]
             ]
         ]
 
