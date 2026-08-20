@@ -110,6 +110,8 @@ struct Note: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var title: String
     var body: String
+    var categoryEnglish: String = ""
+    var categoryKurdish: String = ""
     var dateCreated: Date = Date()
     var dateModified: Date = Date()
 }
@@ -614,6 +616,15 @@ struct NoteRowView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
 
+                if !note.categoryEnglish.isEmpty {
+                    Text(note.categoryKurdish.isEmpty ? note.categoryEnglish : "\(note.categoryEnglish) · \(note.categoryKurdish)")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(settings.theme.gradient, in: Capsule())
+                        .foregroundStyle(.white)
+                }
+
                 Text(relativeDateFormatter.localizedString(for: note.dateModified, relativeTo: Date()))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -767,6 +778,15 @@ struct NoteDetailView: View {
                 .clipShape(Capsule())
                 .padding(.top, 4)
 
+                if !note.categoryEnglish.isEmpty {
+                    Text(note.categoryKurdish.isEmpty ? note.categoryEnglish : "\(note.categoryEnglish) · \(note.categoryKurdish)")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(settings.theme.gradient, in: Capsule())
+                        .foregroundStyle(.white)
+                }
+
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Created \(absoluteDateFormatter.string(from: note.dateCreated))", systemImage: "calendar")
                     Label("Edited \(relativeDateFormatter.localizedString(for: note.dateModified, relativeTo: Date()))", systemImage: "clock")
@@ -841,6 +861,7 @@ struct ResolvedAnswerSegment: Identifiable, Equatable {
     var noteID: UUID?
     var excerpt: String?
     var theme: AppTheme?
+    var isValue: Bool = false
 }
 
 struct ChatMessage: Identifiable, Equatable {
@@ -888,6 +909,37 @@ private struct ChatBubbleAssistantPlain: View {
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             Spacer(minLength: 40)
         }
+    }
+}
+
+/// A clean, themed box for a copyable answer value (password, code, price, etc.) with a tap-to-copy icon.
+private struct ValueCopyChip: View {
+    let text: String
+    let theme: AppTheme
+    @State private var didCopy = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            withAnimation(.snappy) { didCopy = true }
+            Task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                withAnimation(.snappy) { didCopy = false }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(text)
+                    .font(.system(.body, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.white)
+                Image(systemName: didCopy ? "checkmark.circle.fill" : "doc.on.doc")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(theme.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1075,6 +1127,16 @@ struct AskView: View {
                         .textSelection(.enabled)
                     Spacer(minLength: 24)
                 }
+
+                let valueSegments = segments.filter { $0.isValue }
+                if !valueSegments.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(valueSegments) { segment in
+                            ValueCopyChip(text: segment.text, theme: segment.theme ?? settings.theme)
+                        }
+                    }
+                    .padding(.leading, 16)
+                }
             }
         }
     }
@@ -1205,7 +1267,9 @@ struct AskView: View {
                 switch parsed.action {
                 case "create_note":
                     let title = (parsed.title?.isEmpty == false) ? parsed.title! : "Untitled"
-                    let newNote = Note(title: title, body: parsed.content ?? "")
+                    var newNote = Note(title: title, body: parsed.content ?? "")
+                    newNote.categoryEnglish = parsed.categoryEnglish ?? ""
+                    newNote.categoryKurdish = parsed.categoryKurdish ?? ""
                     notesStore.add(newNote)
                     pendingUndo = .removeNote(newNote.id)
 
@@ -1215,6 +1279,8 @@ struct AskView: View {
                         let original = match
                         var updated = match
                         updated.body = parsed.content ?? match.body
+                        if let categoryEnglish = parsed.categoryEnglish { updated.categoryEnglish = categoryEnglish }
+                        if let categoryKurdish = parsed.categoryKurdish { updated.categoryKurdish = categoryKurdish }
                         updated.dateModified = Date()
                         notesStore.update(updated)
                         pendingUndo = .restoreNote(original)
@@ -1261,10 +1327,12 @@ struct AskView: View {
     private func buildSourcedAnswerKind(parsed: AIActionResponse, replyText: String) -> ChatMessage.Kind? {
         guard !parsed.segments.isEmpty else { return nil }
 
-        let reconstructed = parsed.segments.map(\.text).joined()
-        guard reconstructed.trimmingCharacters(in: .whitespacesAndNewlines) == replyText.trimmingCharacters(in: .whitespacesAndNewlines) else {
-            return nil
-        }
+        // Sanity check instead of requiring an exact character match: the model's "reply" and
+        // "segments" fields are generated somewhat independently, so tiny punctuation/spacing
+        // differences between them are common and shouldn't kill the whole highlight feature.
+        // Only bail out if segments look suspiciously incomplete compared to the reply.
+        let reconstructedLength = parsed.segments.reduce(0) { $0 + $1.text.count }
+        guard Double(reconstructedLength) >= Double(replyText.count) * 0.6 else { return nil }
 
         var seenTitles: [String] = []
         for segment in parsed.segments {
@@ -1272,7 +1340,6 @@ struct AskView: View {
                 seenTitles.append(title)
             }
         }
-        guard !seenTitles.isEmpty else { return nil }
 
         var pool = AppTheme.allCases.filter { $0 != settings.theme }.shuffled()
         if pool.isEmpty { pool = AppTheme.allCases.shuffled() }
@@ -1288,13 +1355,20 @@ struct AskView: View {
             titleToNoteID[title] = note.id
             chips.append(SourceNoteChip(id: note.id, title: note.title.isEmpty ? "Untitled" : note.title, theme: theme))
         }
-        guard !chips.isEmpty else { return nil }
 
-        let resolvedSegments: [ResolvedAnswerSegment] = parsed.segments.map { segment in
+        let resolvedSegments: [ResolvedAnswerSegment] = parsed.segments.compactMap { segment in
+            guard !segment.text.isEmpty else { return nil }
             let noteID = segment.sourceNote.flatMap { titleToNoteID[$0] }
-            let theme = segment.sourceNote.flatMap { titleToTheme[$0] }
-            return ResolvedAnswerSegment(text: segment.text, noteID: noteID, excerpt: segment.sourceExcerpt, theme: noteID != nil ? theme : nil)
+            // A copyable value still gets a theme color to render its box, even if it didn't
+            // resolve to a real note — falls back to the app's current theme in that case.
+            let theme = segment.sourceNote.flatMap { titleToTheme[$0] } ?? (segment.isValue ? settings.theme : nil)
+            let showTheme = (noteID != nil || segment.isValue) ? theme : nil
+            return ResolvedAnswerSegment(text: segment.text, noteID: noteID, excerpt: segment.sourceExcerpt, theme: showTheme, isValue: segment.isValue)
         }
+        guard !resolvedSegments.isEmpty else { return nil }
+
+        // Worth the rich rendering if we resolved at least one source chip, or there's a copyable value.
+        guard !chips.isEmpty || resolvedSegments.contains(where: { $0.isValue }) else { return nil }
 
         return .sourcedAnswer(chips: chips, segments: resolvedSegments)
     }
