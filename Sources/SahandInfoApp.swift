@@ -112,6 +112,8 @@ struct Note: Identifiable, Codable, Equatable {
     var body: String
     var categoryEnglish: String = ""
     var categoryKurdish: String = ""
+    var reminderDate: Date? = nil
+    var isReminderCompleted: Bool = false
     var dateCreated: Date = Date()
     var dateModified: Date = Date()
 }
@@ -500,6 +502,7 @@ struct NotesListView: View {
     @State private var path: [NoteDestination] = []
     @State private var searchText = ""
     @State private var didTapAdd = false
+    @State private var showingSettings = false
 
     struct NoteDestination: Hashable {
         let id: UUID
@@ -573,6 +576,18 @@ struct NotesListView: View {
             }
             .navigationTitle("Notes")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search notes")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+            }
             .navigationDestination(for: NoteDestination.self) { dest in
                 NoteDetailView(noteID: dest.id, startInEditMode: dest.startEditing)
             }
@@ -1270,6 +1285,10 @@ struct AskView: View {
                     var newNote = Note(title: title, body: parsed.content ?? "")
                     newNote.categoryEnglish = parsed.categoryEnglish ?? ""
                     newNote.categoryKurdish = parsed.categoryKurdish ?? ""
+                    if let dateString = parsed.reminderDate,
+                       let parsedDate = AIProtocol.reminderDateFormatter.date(from: dateString) {
+                        newNote.reminderDate = parsedDate
+                    }
                     notesStore.add(newNote)
                     pendingUndo = .removeNote(newNote.id)
 
@@ -1294,6 +1313,25 @@ struct AskView: View {
                         pendingDelete = match
                     } else {
                         replyText = "I couldn't figure out which note to delete. Try naming it more specifically."
+                    }
+
+                case "set_reminder":
+                    if let targetText = parsed.target,
+                       let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
+                        let original = match
+                        var updated = match
+                        if let dateString = parsed.reminderDate,
+                           let parsedDate = AIProtocol.reminderDateFormatter.date(from: dateString) {
+                            updated.reminderDate = parsedDate
+                        }
+                        if let done = parsed.reminderDone {
+                            updated.isReminderCompleted = done
+                        }
+                        updated.dateModified = Date()
+                        notesStore.update(updated)
+                        pendingUndo = .restoreNote(original)
+                    } else {
+                        replyText = "I couldn't figure out which note to set a reminder on. Try naming it more specifically."
                     }
 
                 default:
@@ -1419,6 +1457,7 @@ struct AnswerCardView: View {
 struct SettingsView: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var notesStore: NotesStore
+    @Environment(\.dismiss) private var dismiss
 
     @State private var pendingExportURL: URL?
     @State private var showingImporter = false
@@ -1607,6 +1646,11 @@ struct SettingsView: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
                 handleImport(result)
             }
@@ -1672,6 +1716,196 @@ struct SettingsView: View {
 
 // MARK: - Root
 
+// MARK: - Date (Reminders)
+
+enum DateFilterMode: Equatable {
+    case mostUrgent
+    case leastUrgent
+    case dateRange(Date, Date)
+    case completedOnly
+    case notCompletedOnly
+}
+
+struct DateView: View {
+    @EnvironmentObject var notesStore: NotesStore
+    @EnvironmentObject var settings: SettingsStore
+
+    @State private var filter: DateFilterMode = .mostUrgent
+    @State private var showingDateRangeSheet = false
+    @State private var rangeStart = Date()
+    @State private var rangeEnd = Date().addingTimeInterval(7 * 24 * 60 * 60)
+    @State private var path: [NotesListView.NoteDestination] = []
+
+    private var reminderNotes: [Note] {
+        let withReminders = notesStore.notes.filter { $0.reminderDate != nil }
+        switch filter {
+        case .mostUrgent:
+            return withReminders.sorted { $0.reminderDate! < $1.reminderDate! }
+        case .leastUrgent:
+            return withReminders.sorted { $0.reminderDate! > $1.reminderDate! }
+        case .dateRange(let start, let end):
+            return withReminders
+                .filter { $0.reminderDate! >= start && $0.reminderDate! <= end }
+                .sorted { $0.reminderDate! < $1.reminderDate! }
+        case .completedOnly:
+            return withReminders.filter { $0.isReminderCompleted }.sorted { $0.reminderDate! < $1.reminderDate! }
+        case .notCompletedOnly:
+            return withReminders.filter { !$0.isReminderCompleted }.sorted { $0.reminderDate! < $1.reminderDate! }
+        }
+    }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            Group {
+                if reminderNotes.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Reminders", systemImage: "calendar")
+                    } description: {
+                        Text("Ask the AI to remind you about a note, and it'll show up here.")
+                    }
+                } else {
+                    List {
+                        ForEach(Array(reminderNotes.enumerated()), id: \.element.id) { index, note in
+                            Button {
+                                path.append(NotesListView.NoteDestination(id: note.id))
+                            } label: {
+                                reminderRow(note: note, urgencyColor: urgencyColor(index: index, total: reminderNotes.count))
+                            }
+                            .buttonStyle(.plain)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .animation(.snappy, value: reminderNotes)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Date")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button("Most urgent → least urgent") { filter = .mostUrgent }
+                        Button("Least urgent → most urgent") { filter = .leastUrgent }
+                        Button("Date range…") { showingDateRangeSheet = true }
+                        Button("What's done") { filter = .completedOnly }
+                        Button("What's not done") { filter = .notCompletedOnly }
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+            .sheet(isPresented: $showingDateRangeSheet) {
+                dateRangeSheet
+            }
+            .navigationDestination(for: NotesListView.NoteDestination.self) { dest in
+                NoteDetailView(noteID: dest.id)
+            }
+        }
+    }
+
+    private var dateRangeSheet: some View {
+        NavigationStack {
+            Form {
+                DatePicker("From", selection: $rangeStart, displayedComponents: [.date, .hourAndMinute])
+                DatePicker("To", selection: $rangeEnd, displayedComponents: [.date, .hourAndMinute])
+            }
+            .navigationTitle("Date Range")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Apply") {
+                        filter = .dateRange(rangeStart, rangeEnd)
+                        showingDateRangeSheet = false
+                    }
+                }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { showingDateRangeSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func reminderRow(note: Note, urgencyColor: Color) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Button {
+                toggleCompleted(note)
+            } label: {
+                Image(systemName: note.isReminderCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(note.isReminderCompleted ? Color.secondary : urgencyColor)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(.headline)
+                    .foregroundStyle(note.isReminderCompleted ? .secondary : .primary)
+                    .strikethrough(note.isReminderCompleted)
+
+                Text(note.previewText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                if let date = note.reminderDate {
+                    Text(reminderDateFormatter.string(from: date))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(urgencyColor.opacity(note.isReminderCompleted ? 0 : 0.7), lineWidth: 1.5)
+        )
+        .shadow(color: urgencyColor.opacity(note.isReminderCompleted ? 0 : 0.55), radius: 10, x: 0, y: 0)
+    }
+
+    private func toggleCompleted(_ note: Note) {
+        var updated = note
+        updated.isReminderCompleted.toggle()
+        notesStore.update(updated)
+    }
+
+    private func urgencyColor(index: Int, total: Int) -> Color {
+        guard total > 1 else { return Color(red: 1.0, green: 0.23, blue: 0.19) }
+        let t = Double(index) / Double(total - 1) // 0 = most urgent ... 1 = least urgent
+
+        let red = (r: 1.0, g: 0.23, b: 0.19)
+        let yellow = (r: 1.0, g: 0.80, b: 0.0)
+        let green = (r: 0.20, g: 0.78, b: 0.35)
+
+        func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double { a + (b - a) * t }
+
+        if t <= 0.5 {
+            let local = t / 0.5
+            return Color(red: lerp(red.r, yellow.r, local), green: lerp(red.g, yellow.g, local), blue: lerp(red.b, yellow.b, local))
+        } else {
+            let local = (t - 0.5) / 0.5
+            return Color(red: lerp(yellow.r, green.r, local), green: lerp(yellow.g, green.g, local), blue: lerp(yellow.b, green.b, local))
+        }
+    }
+
+    private var reminderDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -1681,8 +1915,8 @@ struct ContentView: View {
                 .tabItem { Label("Notes", systemImage: "note.text") }
             AskView()
                 .tabItem { Label("Ask", systemImage: "questionmark.bubble") }
-            SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+            DateView()
+                .tabItem { Label("Date", systemImage: "calendar") }
         }
         .tint(settings.theme.endColor)
     }
