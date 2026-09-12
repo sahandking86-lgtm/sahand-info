@@ -1,6 +1,8 @@
 import Foundation
 
 enum OnlineAI {
+    private static let modelURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent")
+
     static func answer(
         question: String,
         relevantNotes: [Note],
@@ -20,11 +22,62 @@ enum OnlineAI {
         let body: [String: Any] = [
             "contents": contents,
             "systemInstruction": [
-                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes, notePattern: notePattern.isEmpty ? nil : notePattern, includeCategoryTagging: true, includeReminderTagging: true)]]
+                "parts": [["text": AIProtocol.systemPrompt(notes: relevantNotes, notePattern: notePattern.isEmpty ? nil : notePattern, includeCategoryTagging: true, includeReminderTagging: true, notesAreComplete: true)]]
             ]
         ]
 
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent") else {
+        return await sendRequest(body: body, apiKey: apiKey)
+    }
+
+    /// A small, focused call just to suggest a bilingual category for a note — used to
+    /// auto-tag notes the user writes themselves, separate from the full Ask conversation.
+    static func suggestCategory(title: String, body noteBody: String, apiKey: String) async -> (en: String, ku: String)? {
+        guard !apiKey.isEmpty else { return nil }
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBody = noteBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty || !trimmedBody.isEmpty else { return nil }
+
+        let prompt = """
+        You are categorizing a personal note. Respond with ONLY a single JSON object, nothing else — no explanation, no markdown fences: {"category_en": "short English category", "category_ku": "the same category translated into Kurdish (Central Kurdish / Sorani, Kurdish Arabic-based script)"}. Keep both short — a word or two (e.g. Finance, Health, Passwords, Work, Travel).
+
+        Note title: \(trimmedTitle.isEmpty ? "(untitled)" : trimmedTitle)
+        Note body: \(trimmedBody.isEmpty ? "(empty)" : trimmedBody)
+        """
+
+        let body: [String: Any] = [
+            "contents": [
+                ["role": "user", "parts": [["text": prompt]]]
+            ]
+        ]
+
+        let rawText = await sendRequest(body: body, apiKey: apiKey)
+
+        guard
+            let firstBrace = rawText.firstIndex(of: "{"),
+            let lastBrace = rawText.lastIndex(of: "}"),
+            firstBrace < lastBrace
+        else {
+            return nil
+        }
+
+        let jsonSubstring = rawText[firstBrace...lastBrace]
+        guard
+            let data = jsonSubstring.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let categoryEnglish = obj["category_en"] as? String,
+            !categoryEnglish.isEmpty
+        else {
+            return nil
+        }
+
+        let categoryKurdish = (obj["category_ku"] as? String) ?? ""
+        return (en: categoryEnglish, ku: categoryKurdish)
+    }
+
+    /// Shared request + retry logic used by both answer() and suggestCategory().
+    private static func sendRequest(body: [String: Any], apiKey: String) async -> String {
+        guard let url = modelURL else {
             return "Invalid API URL."
         }
 
