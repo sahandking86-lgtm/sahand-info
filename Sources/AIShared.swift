@@ -41,11 +41,15 @@ enum AIProtocol {
         return formatter
     }
 
-    static func systemPrompt(notes: [Note], notePattern: String? = nil, includeCategoryTagging: Bool = false, includeReminderTagging: Bool = false) -> String {
+    static func systemPrompt(notes: [Note], notePattern: String? = nil, includeCategoryTagging: Bool = false, includeReminderTagging: Bool = false, notesAreComplete: Bool = false) -> String {
         let context = notes.map { note -> String in
             let title = note.title.isEmpty ? "Untitled" : note.title
             return "Title: \(title)\nBody: \(note.body)"
         }.joined(separator: "\n\n")
+
+        let notesHeader = notesAreComplete
+            ? "Here are ALL of the user's notes, every single one. Read through every note carefully before answering — do not skim, do not assume something isn't there without checking each note's full body. If the answer exists anywhere in these notes, find it and state it confidently. Only say something can't be found after you've genuinely checked everything below."
+            : "Relevant notes:"
 
         let patternSection: String
         if let notePattern, !notePattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -58,7 +62,7 @@ enum AIProtocol {
 
         let categorySection: String
         if includeCategoryTagging {
-            categorySection = "\n\nWhen the action is \"create_note\" or \"update_note\", also suggest a short category for the note (e.g. Finance, Health, Passwords, Work) in TWO languages: put the English category in \"category_en\", and the same category translated into Kurdish (Central Kurdish / Sorani, written in Kurdish Arabic-based script) in \"category_ku\". Keep both short — a word or two. For any other action, or if you don't have a confident category, leave both fields empty."
+            categorySection = "\n\nWhen the action is \"create_note\" or \"update_note\", also suggest a short category for the note (e.g. Finance, Health, Passwords, Work) in TWO languages: put the English category in \"category_en\", and the same category translated into Kurdish (Central Kurdish / Sorani, written in Kurdish Arabic-based script) in \"category_ku\". Keep both short — a word or two. You can also use action \"set_category\" to set or change ONLY a note's category, without touching its title or body — put text identifying the note in \"target\", and the category in \"category_en\"/\"category_ku\" as above. Use set_category whenever the user asks to categorize, tag, re-tag, or label a note, including notes that don't have a category yet. If you'd use set_category but no note clearly matches, use \"none\" instead and explain in \"reply\". For any action where a category doesn't apply, or you don't have a confident one, leave both category fields empty."
         } else {
             categorySection = ""
         }
@@ -76,17 +80,17 @@ enum AIProtocol {
         return """
         You are an assistant inside a personal notes app. You can answer questions about the notes below, and you can also make changes to the notes when asked.
 
-        Relevant notes:
+        \(notesHeader)
         \(context.isEmpty ? "(no matching notes found)" : context)\(patternSection)
 
         Always respond with ONLY a single JSON object and nothing else — no explanation, no markdown code fences — matching exactly this shape:
         {"reply": "short message to show the user", "action": "none", "target": "", "title": "", "content": "", "segments": []\(categoryFieldsJSON)\(reminderFieldsJSON)}
 
         Rules:
-        - "action" must be exactly one of: "none", "create_note", "update_note", "delete_note"\(includeReminderTagging ? ", \"set_reminder\"" : "").
+        - "action" must be exactly one of: "none", "create_note", "update_note", "delete_note"\(includeCategoryTagging ? ", \"set_category\"" : "")\(includeReminderTagging ? ", \"set_reminder\"" : "").
         - Use "none" when the user is just asking a question. Put your answer in "reply", using ONLY the notes above. If the notes don't answer it, say so in "reply".
         - Use "create_note" when the user asks to add/create a new note. Put a short title in "title" and the note text in "content".
-        - Use "update_note" when the user asks to change, edit, or correct something in an existing note (like a price). Put text identifying which note in "target" (e.g. words from its title), and put the ENTIRE new note body in "content" — the complete original text with the requested change applied, not just the changed part.
+        - Use "update_note" when the user asks to change, edit, or correct something in an existing note (like a price), or to rename it. Put text identifying which note in "target" (e.g. words from its title), and put the ENTIRE new note body in "content" — the complete original text with the requested change applied, not just the changed part. If the user also wants to rename the note, put the new name in "title" too; otherwise leave "title" empty to keep its current one.
         - Use "delete_note" when the user asks to delete or remove a note. Put text identifying which note in "target".
         - If you'd use update_note or delete_note but no note above clearly matches, use "none" instead and explain in "reply" that you couldn't find that note.
         - "reply" must always be filled in with a short, friendly confirmation of what you did, or your answer to the question.
