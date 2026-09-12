@@ -503,6 +503,8 @@ struct NotesListView: View {
     @State private var searchText = ""
     @State private var didTapAdd = false
     @State private var showingSettings = false
+    @State private var categoryFilter: String? = nil
+    @State private var showingCategoryFilter = false
 
     struct NoteDestination: Hashable {
         let id: UUID
@@ -513,10 +515,18 @@ struct NotesListView: View {
         notesStore.notes.sorted { $0.dateModified > $1.dateModified }
     }
 
+    private var availableCategories: [String] {
+        Set(notesStore.notes.map { $0.categoryEnglish }.filter { !$0.isEmpty }).sorted()
+    }
+
     private var filteredNotes: [Note] {
+        var base = sortedNotes
+        if let categoryFilter {
+            base = base.filter { $0.categoryEnglish == categoryFilter }
+        }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return sortedNotes }
-        return sortedNotes.filter {
+        guard !query.isEmpty else { return base }
+        return base.filter {
             $0.title.lowercased().contains(query) || $0.body.lowercased().contains(query)
         }
     }
@@ -584,9 +594,30 @@ struct NotesListView: View {
                         Image(systemName: "gearshape")
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 6) {
+                        if let categoryFilter {
+                            Text(categoryFilter)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(settings.theme.gradient, in: Capsule())
+                                .foregroundStyle(.white)
+                                .onTapGesture { self.categoryFilter = nil }
+                        }
+                        Button {
+                            showingCategoryFilter = true
+                        } label: {
+                            Image(systemName: categoryFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                        }
+                    }
+                }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showingCategoryFilter) {
+                CategoryFilterSheet(categories: availableCategories, selectedCategory: $categoryFilter)
             }
             .navigationDestination(for: NoteDestination.self) { dest in
                 NoteDetailView(noteID: dest.id, startInEditMode: dest.startEditing)
@@ -605,6 +636,78 @@ struct NotesListView: View {
         withAnimation(.snappy) {
             notesStore.delete(ids: [note.id])
         }
+    }
+}
+
+/// A reusable "pick a category to filter by" sheet with search, shared by the Notes and Date tabs.
+struct CategoryFilterSheet: View {
+    let categories: [String]
+    @Binding var selectedCategory: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+    @FocusState private var isSearchFocused: Bool
+
+    private var filteredCategories: [String] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return categories }
+        return categories.filter { $0.lowercased().contains(query) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        selectedCategory = nil
+                        isSearchFocused = false
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text("All Notes")
+                            Spacer()
+                            if selectedCategory == nil {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+
+                if !filteredCategories.isEmpty {
+                    Section {
+                        ForEach(filteredCategories, id: \.self) { category in
+                            Button {
+                                selectedCategory = category
+                                isSearchFocused = false
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(category)
+                                    Spacer()
+                                    if selectedCategory == category {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if !searchText.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            }
+            .scrollDismissesKeyboard(.immediately)
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search categories")
+            .searchFocused($isSearchFocused)
+            .navigationTitle("Filter by Category")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        isSearchFocused = false
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -666,6 +769,7 @@ struct NoteDetailView: View {
     @State private var draftTitle = ""
     @State private var draftBody = ""
     @State private var didSave = false
+    @State private var autoCategorizeTask: Task<Void, Never>? = nil
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
@@ -769,6 +873,8 @@ struct NoteDetailView: View {
             .padding(.horizontal, 15)
             .frame(maxHeight: .infinity)
         }
+        .onChange(of: draftTitle) { _, _ in scheduleAutoCategorize() }
+        .onChange(of: draftBody) { _, _ in scheduleAutoCategorize() }
     }
 
     private func readingView(note: Note) -> some View {
@@ -835,6 +941,34 @@ struct NoteDetailView: View {
         updated.body = draftBody
         updated.dateModified = Date()
         notesStore.update(updated)
+    }
+
+    /// While the user writes a note themselves, wait for a pause in typing, then have the
+    /// online AI suggest a bilingual category — but only if one isn't already set, and only
+    /// when online AI is actually configured. Never touches the offline model.
+    private func scheduleAutoCategorize() {
+        guard settings.useOnlineAI, !settings.deepSeekAPIKey.isEmpty else { return }
+        autoCategorizeTask?.cancel()
+
+        let titleSnapshot = draftTitle
+        let bodySnapshot = draftBody
+        let targetID = noteID
+
+        autoCategorizeTask = Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            guard let current = notesStore.notes.first(where: { $0.id == targetID }), current.categoryEnglish.isEmpty else { return }
+
+            guard let result = await OnlineAI.suggestCategory(title: titleSnapshot, body: bodySnapshot, apiKey: settings.deepSeekAPIKey) else { return }
+            guard !Task.isCancelled else { return }
+
+            // Re-fetch the latest note rather than reusing `current` — avoids clobbering
+            // a category the user or another action may have set in the meantime.
+            guard var latest = notesStore.notes.first(where: { $0.id == targetID }), latest.categoryEnglish.isEmpty else { return }
+            latest.categoryEnglish = result.en
+            latest.categoryKurdish = result.ku
+            notesStore.update(latest)
+        }
     }
 
     private func highlightedAttributedString(body: String, highlight: String?, color: Color) -> AttributedString {
@@ -1266,12 +1400,13 @@ struct AskView: View {
                 messages.append(ChatMessage(id: thinkingID, kind: .plainText("Thinking…")))
             }
             let searchSeed = (conversationHistory.suffix(2).map { $0.text } + [trimmed]).joined(separator: " ")
-            let relevantNotes = QuestionAnswerer.topMatchingNotes(for: searchSeed, in: notesStore.notes)
+            let topMatchedNotes = QuestionAnswerer.topMatchingNotes(for: searchSeed, in: notesStore.notes)
+            let allNotes = notesStore.notes
             let historySnapshot = conversationHistory
             Task {
                 let rawText = settings.useOnlineAI
-                    ? await OnlineAI.answer(question: trimmed, relevantNotes: relevantNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
-                    : await LocalAI.shared.answer(question: trimmed, relevantNotes: relevantNotes)
+                    ? await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
+                    : await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
 
                 let parsed = AIProtocol.parse(rawText)
                 var replyText = parsed.reply
@@ -1298,6 +1433,7 @@ struct AskView: View {
                         let original = match
                         var updated = match
                         updated.body = parsed.content ?? match.body
+                        if let newTitle = parsed.title, !newTitle.isEmpty { updated.title = newTitle }
                         if let categoryEnglish = parsed.categoryEnglish { updated.categoryEnglish = categoryEnglish }
                         if let categoryKurdish = parsed.categoryKurdish { updated.categoryKurdish = categoryKurdish }
                         updated.dateModified = Date()
@@ -1332,6 +1468,20 @@ struct AskView: View {
                         pendingUndo = .restoreNote(original)
                     } else {
                         replyText = "I couldn't figure out which note to set a reminder on. Try naming it more specifically."
+                    }
+
+                case "set_category":
+                    if let targetText = parsed.target,
+                       let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
+                        let original = match
+                        var updated = match
+                        if let categoryEnglish = parsed.categoryEnglish { updated.categoryEnglish = categoryEnglish }
+                        if let categoryKurdish = parsed.categoryKurdish { updated.categoryKurdish = categoryKurdish }
+                        updated.dateModified = Date()
+                        notesStore.update(updated)
+                        pendingUndo = .restoreNote(original)
+                    } else {
+                        replyText = "I couldn't figure out which note to categorize. Try naming it more specifically."
                     }
 
                 default:
@@ -1735,9 +1885,18 @@ struct DateView: View {
     @State private var rangeStart = Date()
     @State private var rangeEnd = Date().addingTimeInterval(7 * 24 * 60 * 60)
     @State private var path: [NotesListView.NoteDestination] = []
+    @State private var categoryFilter: String? = nil
+    @State private var showingCategoryFilter = false
+
+    private var availableCategories: [String] {
+        Set(notesStore.notes.filter { $0.reminderDate != nil }.map { $0.categoryEnglish }.filter { !$0.isEmpty }).sorted()
+    }
 
     private var reminderNotes: [Note] {
-        let withReminders = notesStore.notes.filter { $0.reminderDate != nil }
+        var withReminders = notesStore.notes.filter { $0.reminderDate != nil }
+        if let categoryFilter {
+            withReminders = withReminders.filter { $0.categoryEnglish == categoryFilter }
+        }
         switch filter {
         case .mostUrgent:
             return withReminders.sorted { $0.reminderDate! < $1.reminderDate! }
@@ -1787,20 +1946,45 @@ struct DateView: View {
             .navigationTitle("Date")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button("Most urgent → least urgent") { filter = .mostUrgent }
-                        Button("Least urgent → most urgent") { filter = .leastUrgent }
-                        Button("Date range…") { showingDateRangeSheet = true }
-                        Button("What's done") { filter = .completedOnly }
-                        Button("What's not done") { filter = .notCompletedOnly }
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    HStack(spacing: 6) {
+                        if let categoryFilter {
+                            Text(categoryFilter)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(settings.theme.gradient, in: Capsule())
+                                .foregroundStyle(.white)
+                                .onTapGesture { self.categoryFilter = nil }
+                        }
+
+                        Button {
+                            showingCategoryFilter = true
+                        } label: {
+                            Image(systemName: categoryFilter == nil ? "tag" : "tag.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+
+                        Menu {
+                            Button("Most urgent → least urgent") { filter = .mostUrgent }
+                            Button("Least urgent → most urgent") { filter = .leastUrgent }
+                            Button("Date range…") { showingDateRangeSheet = true }
+                            Button("What's done") { filter = .completedOnly }
+                            Button("What's not done") { filter = .notCompletedOnly }
+                        } label: {
+                            Image(systemName: "line.3.horizontal.decrease")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
                     }
                 }
+            }
+            .sheet(isPresented: $showingCategoryFilter) {
+                CategoryFilterSheet(categories: availableCategories, selectedCategory: $categoryFilter)
             }
             .sheet(isPresented: $showingDateRangeSheet) {
                 dateRangeSheet
