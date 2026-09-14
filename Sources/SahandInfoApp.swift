@@ -645,12 +645,15 @@ struct CategoryFilterSheet: View {
     @Binding var selectedCategory: String?
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
-    @FocusState private var isSearchFocused: Bool
 
     private var filteredCategories: [String] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return categories }
         return categories.filter { $0.lowercased().contains(query) }
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     var body: some View {
@@ -659,7 +662,7 @@ struct CategoryFilterSheet: View {
                 Section {
                     Button {
                         selectedCategory = nil
-                        isSearchFocused = false
+                        dismissKeyboard()
                         dismiss()
                     } label: {
                         HStack {
@@ -677,7 +680,7 @@ struct CategoryFilterSheet: View {
                         ForEach(filteredCategories, id: \.self) { category in
                             Button {
                                 selectedCategory = category
-                                isSearchFocused = false
+                                dismissKeyboard()
                                 dismiss()
                             } label: {
                                 HStack {
@@ -696,12 +699,11 @@ struct CategoryFilterSheet: View {
             }
             .scrollDismissesKeyboard(.immediately)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search categories")
-            .searchFocused($isSearchFocused)
             .navigationTitle("Filter by Category")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        isSearchFocused = false
+                        dismissKeyboard()
                         dismiss()
                     }
                 }
