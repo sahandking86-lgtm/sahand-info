@@ -3,6 +3,23 @@ import Foundation
 enum OnlineAI {
     private static let modelURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent")
 
+    /// True if `answer(...)` returned one of its own error strings rather than a real AI reply.
+    /// Centralized here so fallback logic elsewhere never has to guess at the message wording.
+    static func isFailureMessage(_ text: String) -> Bool {
+        let prefixes = [
+            "Add your Gemini API key",
+            "Invalid API URL.",
+            "No response from Gemini.",
+            "Couldn't parse Gemini's response.",
+            "Gemini didn't return any text.",
+            "Gemini returned an error:",
+            "Gemini is busy right now.",
+            "Network error:",
+            "Something went wrong talking to Gemini."
+        ]
+        return prefixes.contains { text.hasPrefix($0) }
+    }
+
     static func answer(
         question: String,
         relevantNotes: [Note],
