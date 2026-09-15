@@ -229,11 +229,18 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    @Published var autoFallbackToOffline: Bool {
+        didSet {
+            UserDefaults.standard.set(autoFallbackToOffline, forKey: fallbackStorageKey)
+        }
+    }
+
     private let storageKey = "sahand_info_answer_mode_v1"
     private let onlineStorageKey = "sahand_info_use_online_ai_v1"
     private let apiKeyStorageKey = "sahand_info_deepseek_api_key_v1"
     private let notePatternStorageKey = "sahand_info_note_pattern_v1"
     private let themeStorageKey = "sahand_info_theme_v1"
+    private let fallbackStorageKey = "sahand_info_auto_fallback_offline_v1"
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: storageKey),
@@ -251,6 +258,7 @@ final class SettingsStore: ObservableObject {
         } else {
             theme = .classic
         }
+        autoFallbackToOffline = UserDefaults.standard.bool(forKey: fallbackStorageKey)
     }
 }
 
@@ -1406,9 +1414,15 @@ struct AskView: View {
             let allNotes = notesStore.notes
             let historySnapshot = conversationHistory
             Task {
-                let rawText = settings.useOnlineAI
-                    ? await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
-                    : await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
+                var rawText: String
+                if settings.useOnlineAI {
+                    rawText = await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
+                    if settings.autoFallbackToOffline, OnlineAI.isFailureMessage(rawText) {
+                        rawText = await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
+                    }
+                } else {
+                    rawText = await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
+                }
 
                 let parsed = AIProtocol.parse(rawText)
                 var replyText = parsed.reply
@@ -1671,11 +1685,11 @@ struct SettingsView: View {
                         .padding(.horizontal, 4)
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Toggle("Use online AI instead of on-device", isOn: $settings.useOnlineAI)
-
-                        Text(settings.useOnlineAI ? "Currently using: Online AI (Gemini)" : "Currently using: Offline AI (on-device)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Picker("AI Engine", selection: $settings.useOnlineAI) {
+                            Text("Offline AI").tag(false)
+                            Text("Online AI (Gemini)").tag(true)
+                        }
+                        .pickerStyle(.segmented)
 
                         if settings.useOnlineAI {
                             SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
@@ -1687,6 +1701,14 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+
+                        Divider()
+
+                        Toggle("Fall back to offline AI if online isn't available", isOn: $settings.autoFallbackToOffline)
+
+                        Text("If Gemini fails or the API key is missing, automatically answers with the offline model instead. Note: the offline fallback only does plain Q&A — reminders, categories, and full-note search stay online-only.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(16)
                     .cardBackground()
