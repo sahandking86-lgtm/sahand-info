@@ -116,6 +116,29 @@ struct Note: Identifiable, Codable, Equatable {
     var isReminderCompleted: Bool = false
     var dateCreated: Date = Date()
     var dateModified: Date = Date()
+
+    init(title: String, body: String) {
+        self.title = title
+        self.body = body
+    }
+
+    // Custom decoding so older exported backups (made before categories/reminders existed)
+    // still import cleanly — Swift's auto-synthesized Decodable does NOT fall back to a
+    // property's default value when a key is simply missing from the JSON; it would throw
+    // instead. Every field added after the original title/body/dateCreated/dateModified is
+    // decoded as optional here, defaulting exactly like a freshly created Note would.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decode(String.self, forKey: .body)
+        categoryEnglish = try container.decodeIfPresent(String.self, forKey: .categoryEnglish) ?? ""
+        categoryKurdish = try container.decodeIfPresent(String.self, forKey: .categoryKurdish) ?? ""
+        reminderDate = try container.decodeIfPresent(Date.self, forKey: .reminderDate)
+        isReminderCompleted = try container.decodeIfPresent(Bool.self, forKey: .isReminderCompleted) ?? false
+        dateCreated = try container.decodeIfPresent(Date.self, forKey: .dateCreated) ?? Date()
+        dateModified = try container.decodeIfPresent(Date.self, forKey: .dateModified) ?? Date()
+    }
 }
 
 extension Note {
@@ -229,18 +252,11 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    @Published var autoFallbackToOffline: Bool {
-        didSet {
-            UserDefaults.standard.set(autoFallbackToOffline, forKey: fallbackStorageKey)
-        }
-    }
-
     private let storageKey = "sahand_info_answer_mode_v1"
     private let onlineStorageKey = "sahand_info_use_online_ai_v1"
     private let apiKeyStorageKey = "sahand_info_deepseek_api_key_v1"
     private let notePatternStorageKey = "sahand_info_note_pattern_v1"
     private let themeStorageKey = "sahand_info_theme_v1"
-    private let fallbackStorageKey = "sahand_info_auto_fallback_offline_v1"
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: storageKey),
@@ -258,7 +274,6 @@ final class SettingsStore: ObservableObject {
         } else {
             theme = .classic
         }
-        autoFallbackToOffline = UserDefaults.standard.bool(forKey: fallbackStorageKey)
     }
 }
 
@@ -616,7 +631,11 @@ struct NotesListView: View {
                         Button {
                             showingCategoryFilter = true
                         } label: {
-                            Image(systemName: categoryFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                            Image(systemName: categoryFilter == nil ? "tag" : "tag.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(settings.theme.gradient, in: Circle())
                         }
                     }
                 }
@@ -651,6 +670,7 @@ struct NotesListView: View {
 struct CategoryFilterSheet: View {
     let categories: [String]
     @Binding var selectedCategory: String?
+    var allLabel: String = "All Notes"
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
 
@@ -674,7 +694,7 @@ struct CategoryFilterSheet: View {
                         dismiss()
                     } label: {
                         HStack {
-                            Text("All Notes")
+                            Text(allLabel)
                             Spacer()
                             if selectedCategory == nil {
                                 Image(systemName: "checkmark")
@@ -1414,15 +1434,9 @@ struct AskView: View {
             let allNotes = notesStore.notes
             let historySnapshot = conversationHistory
             Task {
-                var rawText: String
-                if settings.useOnlineAI {
-                    rawText = await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
-                    if settings.autoFallbackToOffline, OnlineAI.isFailureMessage(rawText) {
-                        rawText = await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
-                    }
-                } else {
-                    rawText = await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
-                }
+                let rawText = settings.useOnlineAI
+                    ? await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
+                    : await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
 
                 let parsed = AIProtocol.parse(rawText)
                 var replyText = parsed.reply
@@ -1436,9 +1450,12 @@ struct AskView: View {
                     var newNote = Note(title: title, body: parsed.content ?? "")
                     newNote.categoryEnglish = parsed.categoryEnglish ?? ""
                     newNote.categoryKurdish = parsed.categoryKurdish ?? ""
-                    if let dateString = parsed.reminderDate,
-                       let parsedDate = AIProtocol.reminderDateFormatter.date(from: dateString) {
-                        newNote.reminderDate = parsedDate
+                    if let dateString = parsed.reminderDate {
+                        if let parsedDate = AIProtocol.reminderDateFormatter.date(from: dateString) {
+                            newNote.reminderDate = parsedDate
+                        } else {
+                            replyText += " (I couldn't understand the reminder time, so no reminder was set — try rephrasing it.)"
+                        }
                     }
                     notesStore.add(newNote)
                     pendingUndo = .removeNote(newNote.id)
@@ -1472,9 +1489,12 @@ struct AskView: View {
                        let match = QuestionAnswerer.bestMatchingNote(for: targetText, in: notesStore.notes) {
                         let original = match
                         var updated = match
-                        if let dateString = parsed.reminderDate,
-                           let parsedDate = AIProtocol.reminderDateFormatter.date(from: dateString) {
-                            updated.reminderDate = parsedDate
+                        if let dateString = parsed.reminderDate {
+                            if let parsedDate = AIProtocol.reminderDateFormatter.date(from: dateString) {
+                                updated.reminderDate = parsedDate
+                            } else {
+                                replyText += " (I couldn't understand the reminder time, so the date wasn't changed — try rephrasing it.)"
+                            }
                         }
                         if let done = parsed.reminderDone {
                             updated.isReminderCompleted = done
@@ -1701,14 +1721,6 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-
-                        Divider()
-
-                        Toggle("Fall back to offline AI if online isn't available", isOn: $settings.autoFallbackToOffline)
-
-                        Text("If Gemini fails or the API key is missing, automatically answers with the offline model instead. Note: the offline fallback only does plain Q&A — reminders, categories, and full-note search stay online-only.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                     .padding(16)
                     .cardBackground()
@@ -1825,7 +1837,7 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item]) { result in
                 handleImport(result)
             }
         }
@@ -1988,7 +2000,7 @@ struct DateView: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(width: 32, height: 32)
-                                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .background(settings.theme.gradient, in: Circle())
                         }
 
                         Menu {
@@ -1998,17 +2010,17 @@ struct DateView: View {
                             Button("What's done") { filter = .completedOnly }
                             Button("What's not done") { filter = .notCompletedOnly }
                         } label: {
-                            Image(systemName: "line.3.horizontal.decrease")
+                            Image(systemName: "arrow.up.arrow.down")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(width: 32, height: 32)
-                                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .background(settings.theme.gradient, in: Circle())
                         }
                     }
                 }
             }
             .sheet(isPresented: $showingCategoryFilter) {
-                CategoryFilterSheet(categories: availableCategories, selectedCategory: $categoryFilter)
+                CategoryFilterSheet(categories: availableCategories, selectedCategory: $categoryFilter, allLabel: "All Reminders")
             }
             .sheet(isPresented: $showingDateRangeSheet) {
                 dateRangeSheet
