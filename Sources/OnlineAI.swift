@@ -2,23 +2,7 @@ import Foundation
 
 enum OnlineAI {
     private static let modelURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent")
-
-    /// True if `answer(...)` returned one of its own error strings rather than a real AI reply.
-    /// Centralized here so fallback logic elsewhere never has to guess at the message wording.
-    static func isFailureMessage(_ text: String) -> Bool {
-        let prefixes = [
-            "Add your Gemini API key",
-            "Invalid API URL.",
-            "No response from Gemini.",
-            "Couldn't parse Gemini's response.",
-            "Gemini didn't return any text.",
-            "Gemini returned an error:",
-            "Gemini is busy right now.",
-            "Network error:",
-            "Something went wrong talking to Gemini."
-        ]
-        return prefixes.contains { text.hasPrefix($0) }
-    }
+    private static let unavailableMessage = "Gemini isn't available right now. Go to Settings and switch to Offline AI to keep going."
 
     static func answer(
         question: String,
@@ -28,7 +12,7 @@ enum OnlineAI {
         notePattern: String = ""
     ) async -> String {
         guard !apiKey.isEmpty else {
-            return "Add your Gemini API key in Settings first."
+            return "Add a Gemini API key in Settings first, or switch to Offline AI."
         }
 
         var contents: [[String: Any]] = history.map { turn in
@@ -92,10 +76,12 @@ enum OnlineAI {
         return (en: categoryEnglish, ku: categoryKurdish)
     }
 
-    /// Shared request + retry logic used by both answer() and suggestCategory().
+    /// Shared request + retry logic used by both answer() and suggestCategory(). Every failure
+    /// path returns the same clear, unified message — no auto-switching, just a clean signal
+    /// that the user needs to go flip the engine over in Settings themselves.
     private static func sendRequest(body: [String: Any], apiKey: String) async -> String {
         guard let url = modelURL else {
-            return "Invalid API URL."
+            return unavailableMessage
         }
 
         var request = URLRequest(url: url)
@@ -105,14 +91,13 @@ enum OnlineAI {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         let maxAttempts = 3
-        var lastErrorMessage = "Something went wrong talking to Gemini."
 
         for attempt in 1...maxAttempts {
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse else {
-                    lastErrorMessage = "No response from Gemini."
-                    continue
+                    if attempt < maxAttempts { continue }
+                    return unavailableMessage
                 }
 
                 if (200...299).contains(http.statusCode) {
@@ -122,7 +107,7 @@ enum OnlineAI {
                         let content = candidates.first?["content"] as? [String: Any],
                         let parts = content["parts"] as? [[String: Any]]
                     else {
-                        return "Couldn't parse Gemini's response."
+                        return unavailableMessage
                     }
 
                     let text = parts
@@ -131,7 +116,7 @@ enum OnlineAI {
                         .joined()
 
                     guard !text.isEmpty else {
-                        return "Gemini didn't return any text."
+                        return unavailableMessage
                     }
                     return text.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
@@ -139,25 +124,22 @@ enum OnlineAI {
                 // Overloaded (503) or rate-limited (429): worth a couple of retries with backoff.
                 // Anything else (bad key, malformed request, etc.) fails immediately — retrying won't help.
                 if http.statusCode == 503 || http.statusCode == 429 {
-                    lastErrorMessage = "Gemini is busy right now."
                     if attempt < maxAttempts {
                         let delaySeconds = UInt64(attempt) * 2
                         try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
                         continue
                     }
-                } else {
-                    let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-                    return "Gemini returned an error: \(message)"
                 }
+                return unavailableMessage
             } catch {
-                lastErrorMessage = "Network error: \(error.localizedDescription)"
                 if attempt < maxAttempts {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
+                return unavailableMessage
             }
         }
 
-        return "\(lastErrorMessage) Try again in a bit, or switch to offline mode in Settings."
+        return unavailableMessage
     }
 }
