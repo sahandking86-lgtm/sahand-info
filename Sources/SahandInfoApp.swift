@@ -5,16 +5,7 @@ import UniformTypeIdentifiers
 // MARK: - Design System
 
 private enum Layout {
-    static let cornerRadius: CGFloat = 18
-}
-
-extension Color {
-    static let brandStart = Color(red: 0.40, green: 0.36, blue: 0.98)
-    static let brandEnd = Color(red: 0.72, green: 0.34, blue: 0.86)
-
-    static var brandGradient: LinearGradient {
-        LinearGradient(colors: [.brandStart, .brandEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
+    static let cornerRadius: CGFloat = 20
 }
 
 enum AppTheme: String, CaseIterable, Identifiable, Codable {
@@ -72,6 +63,8 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Soft card: gentle fill, wide diffuse shadow, and a hairline border so cards
+/// stay visible in dark mode too.
 private struct CardBackground: ViewModifier {
     var cornerRadius: CGFloat = Layout.cornerRadius
 
@@ -80,7 +73,11 @@ private struct CardBackground: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(Color(.secondarySystemGroupedBackground))
-                    .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
+                    .shadow(color: .black.opacity(0.05), radius: 14, x: 0, y: 6)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.05), lineWidth: 1)
             )
     }
 }
@@ -88,6 +85,127 @@ private struct CardBackground: ViewModifier {
 extension View {
     func cardBackground(cornerRadius: CGFloat = Layout.cornerRadius) -> some View {
         modifier(CardBackground(cornerRadius: cornerRadius))
+    }
+}
+
+/// Soft out-of-focus theme-colored glows floating over the system grouped background.
+/// Gives every tab a modern, ambient feel that follows the user's chosen theme.
+private struct AmbientBackground: View {
+    @EnvironmentObject private var settings: SettingsStore
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color(.systemGroupedBackground)
+                Circle()
+                    .fill(settings.theme.startColor.opacity(0.13))
+                    .frame(width: 340, height: 340)
+                    .blur(radius: 90)
+                    .position(x: proxy.size.width * 0.12, y: proxy.size.height * 0.10)
+                Circle()
+                    .fill(settings.theme.endColor.opacity(0.11))
+                    .frame(width: 380, height: 380)
+                    .blur(radius: 110)
+                    .position(x: proxy.size.width * 0.95, y: proxy.size.height * 0.30)
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// A capsule toggle used for category chips and reminder filters — filled with the
+/// theme gradient when selected, quiet card-style when not.
+private struct SelectablePill: View {
+    @EnvironmentObject private var settings: SettingsStore
+    let title: String
+    var systemImage: String? = nil
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.caption.weight(.semibold))
+                }
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .background {
+                Capsule()
+                    .fill(isSelected
+                          ? AnyShapeStyle(settings.theme.gradient)
+                          : AnyShapeStyle(Color(.secondarySystemGroupedBackground)))
+                    .shadow(color: isSelected ? settings.theme.endColor.opacity(0.35) : .clear, radius: 8, x: 0, y: 4)
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.primary.opacity(isSelected ? 0 : 0.07), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Horizontally scrolling "All + each category" chips row shared by the Notes and Date tabs.
+private struct CategoryChipsRow: View {
+    let categories: [String]
+    @Binding var selection: String?
+    var allLabel: String = "All"
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                SelectablePill(title: allLabel, isSelected: selection == nil) { selection = nil }
+                ForEach(categories, id: \.self) { category in
+                    SelectablePill(title: category, isSelected: selection == category) { selection = category }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
+/// Little spring when a button is pressed — used on the FAB and the send button.
+private struct ScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.snappy(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
+/// Three bouncing dots shown while the AI is thinking, instead of a static "Thinking…" label.
+private struct TypingIndicator: View {
+    @State private var isAnimating = false
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(Color.secondary)
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(isAnimating ? 1 : 0.55)
+                        .opacity(isAnimating ? 1 : 0.35)
+                        .animation(
+                            .easeInOut(duration: 0.55).repeatForever().delay(Double(index) * 0.15),
+                            value: isAnimating
+                        )
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 13)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            Spacer(minLength: 48)
+        }
+        .onAppear { isAnimating = true }
     }
 }
 
@@ -527,7 +645,6 @@ struct NotesListView: View {
     @State private var didTapAdd = false
     @State private var showingSettings = false
     @State private var categoryFilter: String? = nil
-    @State private var showingCategoryFilter = false
 
     struct NoteDestination: Hashable {
         let id: UUID
@@ -557,56 +674,63 @@ struct NotesListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ZStack(alignment: .bottomTrailing) {
-                Group {
-                    if sortedNotes.isEmpty {
-                        ContentUnavailableView {
-                            Label("No Notes Yet", systemImage: "note.text")
-                        } description: {
-                            Text("Tap the button below to create your first note.")
-                        }
-                    } else if filteredNotes.isEmpty {
-                        ContentUnavailableView.search(text: searchText)
-                    } else {
-                        List {
-                            ForEach(filteredNotes) { note in
-                                NavigationLink(value: NoteDestination(id: note.id)) {
-                                    NoteRowView(note: note)
-                                }
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        delete(note)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
+                VStack(spacing: 0) {
+                    if !availableCategories.isEmpty {
+                        CategoryChipsRow(categories: availableCategories, selection: $categoryFilter, allLabel: "All Notes")
+                    }
+
+                    Group {
+                        if sortedNotes.isEmpty {
+                            ContentUnavailableView {
+                                Label("No Notes Yet", systemImage: "note.text")
+                            } description: {
+                                Text("Tap the button below to create your first note.")
+                            }
+                        } else if filteredNotes.isEmpty {
+                            ContentUnavailableView.search(text: searchText)
+                        } else {
+                            List {
+                                ForEach(filteredNotes) { note in
+                                    NavigationLink(value: NoteDestination(id: note.id)) {
+                                        NoteRowView(note: note)
+                                    }
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button(role: .destructive) {
+                                            delete(note)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
                                     }
                                 }
                             }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
+                            .animation(.snappy, value: filteredNotes)
                         }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
-                        .animation(.snappy, value: filteredNotes)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemGroupedBackground))
 
-                // Always visible now — previously this hid whenever the notes list
+                // Always visible — previously this hid whenever the notes list
                 // was empty, even though the empty-state message told people to
                 // "tap the button below" to create their first note.
                 Button(action: addNewNote) {
                     Image(systemName: "plus")
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 58, height: 58)
+                        .frame(width: 60, height: 60)
                         .background(settings.theme.gradient, in: Circle())
-                        .shadow(color: settings.theme.endColor.opacity(0.4), radius: 12, x: 0, y: 6)
+                        .shadow(color: settings.theme.endColor.opacity(0.45), radius: 14, x: 0, y: 7)
                 }
+                .buttonStyle(ScaleButtonStyle())
                 .padding(.trailing, 20)
                 .padding(.bottom, 20)
                 .sensoryFeedback(.impact(weight: .medium), trigger: didTapAdd)
             }
+            .background(AmbientBackground())
             .navigationTitle("Notes")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search notes")
             .toolbar {
@@ -615,36 +739,15 @@ struct NotesListView: View {
                         showingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 6) {
-                        if let categoryFilter {
-                            Text(categoryFilter)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(settings.theme.gradient, in: Capsule())
-                                .foregroundStyle(.white)
-                                .onTapGesture { self.categoryFilter = nil }
-                        }
-                        Button {
-                            showingCategoryFilter = true
-                        } label: {
-                            Image(systemName: categoryFilter == nil ? "tag" : "tag.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(settings.theme.gradient, in: Circle())
-                        }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(settings.theme.gradient, in: Circle())
                     }
                 }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
-            }
-            .sheet(isPresented: $showingCategoryFilter) {
-                CategoryFilterSheet(categories: availableCategories, selectedCategory: $categoryFilter)
             }
             .navigationDestination(for: NoteDestination.self) { dest in
                 NoteDetailView(noteID: dest.id, startInEditMode: dest.startEditing)
@@ -666,121 +769,51 @@ struct NotesListView: View {
     }
 }
 
-/// A reusable "pick a category to filter by" sheet with search, shared by the Notes and Date tabs.
-struct CategoryFilterSheet: View {
-    let categories: [String]
-    @Binding var selectedCategory: String?
-    var allLabel: String = "All Notes"
-    @Environment(\.dismiss) private var dismiss
-    @State private var searchText = ""
-
-    private var filteredCategories: [String] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return categories }
-        return categories.filter { $0.lowercased().contains(query) }
-    }
-
-    private func dismissKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Button {
-                        selectedCategory = nil
-                        dismissKeyboard()
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Text(allLabel)
-                            Spacer()
-                            if selectedCategory == nil {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-
-                if !filteredCategories.isEmpty {
-                    Section {
-                        ForEach(filteredCategories, id: \.self) { category in
-                            Button {
-                                selectedCategory = category
-                                dismissKeyboard()
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    Text(category)
-                                    Spacer()
-                                    if selectedCategory == category {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if !searchText.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                }
-            }
-            .scrollDismissesKeyboard(.immediately)
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search categories")
-            .navigationTitle("Filter by Category")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismissKeyboard()
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-}
-
 struct NoteRowView: View {
     @EnvironmentObject var settings: SettingsStore
     let note: Note
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(settings.theme.gradient)
-                .frame(width: 4)
-                .padding(.vertical, 2)
-
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.headline)
                     .fontDesign(.rounded)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(note.previewText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                Spacer(minLength: 0)
 
+                if note.reminderDate != nil {
+                    Image(systemName: note.isReminderCompleted ? "checkmark.circle.fill" : "bell.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(note.isReminderCompleted ? Color.secondary : settings.theme.endColor)
+                }
+            }
+
+            Text(note.previewText)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            HStack(spacing: 8) {
                 if !note.categoryEnglish.isEmpty {
                     Text(note.categoryKurdish.isEmpty ? note.categoryEnglish : "\(note.categoryEnglish) · \(note.categoryKurdish)")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(settings.theme.gradient, in: Capsule())
-                        .foregroundStyle(.white)
+                        .background(settings.theme.endColor.opacity(0.14), in: Capsule())
+                        .foregroundStyle(settings.theme.endColor)
                 }
+
+                Spacer(minLength: 0)
 
                 Text(relativeDateFormatter.localizedString(for: note.dateModified, relativeTo: Date()))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-
-            Spacer(minLength: 0)
         }
-        .padding(14)
+        .padding(16)
         .cardBackground()
     }
 }
@@ -792,7 +825,7 @@ struct NoteDetailView: View {
     @EnvironmentObject var settings: SettingsStore
     let noteID: UUID
     var highlightText: String? = nil
-    var highlightColor: Color = .purple
+    var highlightColor: Color = Color(red: 1.0, green: 0.8, blue: 0.2)
     var startInEditMode: Bool = false
 
     @State private var isEditing = false
@@ -820,7 +853,7 @@ struct NoteDetailView: View {
                         readingView(note: note)
                     }
                 }
-                .background(Color(.systemGroupedBackground))
+                .background(AmbientBackground())
                 .navigationTitle(isEditing ? "Edit Note" : "")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -909,41 +942,38 @@ struct NoteDetailView: View {
 
     private func readingView(note: Note) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !note.categoryEnglish.isEmpty {
+                        Text(note.categoryKurdish.isEmpty ? note.categoryEnglish : "\(note.categoryEnglish) · \(note.categoryKurdish)")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(settings.theme.endColor.opacity(0.14), in: Capsule())
+                            .foregroundStyle(settings.theme.endColor)
+                    }
+                }
 
                 Text(highlightedAttributedString(body: note.body, highlight: highlightText, color: highlightColor))
                     .font(.body)
-                    .lineSpacing(4)
+                    .lineSpacing(5)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                LinearGradient(
-                    colors: [settings.theme.endColor.opacity(0.3), settings.theme.startColor.opacity(0.03)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(height: 1.5)
-                .clipShape(Capsule())
-                .padding(.top, 4)
-
-                if !note.categoryEnglish.isEmpty {
-                    Text(note.categoryKurdish.isEmpty ? note.categoryEnglish : "\(note.categoryEnglish) · \(note.categoryKurdish)")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(settings.theme.gradient, in: Capsule())
-                        .foregroundStyle(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Label("Created \(absoluteDateFormatter.string(from: note.dateCreated))", systemImage: "calendar")
                     Label("Edited \(relativeDateFormatter.localizedString(for: note.dateModified, relativeTo: Date()))", systemImage: "clock")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardBackground(cornerRadius: 16)
+                .padding(.top, 8)
             }
             .padding(20)
         }
@@ -1063,13 +1093,20 @@ private struct ChatBubbleUser: View {
 
     var body: some View {
         HStack {
-            Spacer(minLength: 40)
+            Spacer(minLength: 48)
             Text(text)
                 .font(.body)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .padding(.vertical, 11)
+                .background {
+                    UnevenRoundedRectangle(
+                        cornerRadii: .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20),
+                        style: .continuous
+                    )
+                    .fill(settings.theme.gradient)
+                    .shadow(color: settings.theme.endColor.opacity(0.25), radius: 8, x: 0, y: 4)
+                }
                 .textSelection(.enabled)
         }
     }
@@ -1084,9 +1121,16 @@ private struct ChatBubbleAssistantPlain: View {
                 .font(.body)
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            Spacer(minLength: 40)
+                .padding(.vertical, 11)
+                .background {
+                    UnevenRoundedRectangle(
+                        cornerRadii: .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
+                        style: .continuous
+                    )
+                    .fill(Color(.secondarySystemGroupedBackground))
+                    .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 3)
+                }
+            Spacer(minLength: 48)
         }
     }
 }
@@ -1115,8 +1159,9 @@ private struct ValueCopyChip: View {
                     .foregroundStyle(.white)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(theme.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.vertical, 9)
+            .background(theme.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: theme.endColor.opacity(0.35), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(.plain)
     }
@@ -1132,6 +1177,12 @@ struct AskView: View {
     @State private var didAsk = false
     @State private var conversationHistory: [ConversationTurn] = []
     @FocusState private var isInputFocused: Bool
+
+    private let suggestions = [
+        "How much did the restaurant cost?",
+        "Find a password in my notes",
+        "Create a new note for me"
+    ]
 
     struct AskDestination: Hashable {
         let noteID: UUID
@@ -1157,11 +1208,11 @@ struct AskView: View {
 
                 inputBar
             }
-            .background(Color(.systemGroupedBackground))
+            .background(AmbientBackground())
             .navigationTitle("Ask")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AskDestination.self) { dest in
-                NoteDetailView(noteID: dest.noteID, highlightText: dest.highlight, highlightColor: dest.highlightColor ?? .purple)
+                NoteDetailView(noteID: dest.noteID, highlightText: dest.highlight, highlightColor: dest.highlightColor ?? Color(red: 1.0, green: 0.8, blue: 0.2))
             }
             .toolbar {
                 if !messages.isEmpty {
@@ -1169,7 +1220,10 @@ struct AskView: View {
                         Button(role: .destructive) {
                             withAnimation(.snappy) { messages.removeAll() }
                         } label: {
-                            Image(systemName: "xmark.circle")
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -1179,11 +1233,15 @@ struct AskView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             Spacer()
             Image(systemName: "sparkles")
-                .font(.system(size: 40))
-                .foregroundStyle(settings.theme.gradient)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 76, height: 76)
+                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: settings.theme.endColor.opacity(0.4), radius: 18, x: 0, y: 10)
+
             Text("Ask your notes")
                 .font(.system(.title2, design: .rounded, weight: .bold))
             Text("Get quick answers pulled straight from what you've written.")
@@ -1191,6 +1249,26 @@ struct AskView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
+
+            VStack(spacing: 8) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button {
+                        questionText = suggestion
+                        isInputFocused = true
+                    } label: {
+                        Text(suggestion)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 6)
+
             Spacer()
             Spacer()
         }
@@ -1232,7 +1310,11 @@ struct AskView: View {
                 Spacer(minLength: 24)
             }
         case .plainText(let text):
-            ChatBubbleAssistantPlain(text: text)
+            if text == "Thinking…" {
+                TypingIndicator()
+            } else {
+                ChatBubbleAssistantPlain(text: text)
+            }
         case .actionResult(let text, let undo):
             VStack(alignment: .leading, spacing: 6) {
                 ChatBubbleAssistantPlain(text: text)
@@ -1289,6 +1371,7 @@ struct AskView: View {
                                         .padding(.vertical, 5)
                                         .background(chip.theme.gradient, in: Capsule())
                                         .foregroundStyle(.white)
+                                        .shadow(color: chip.theme.endColor.opacity(0.35), radius: 6, x: 0, y: 3)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -1301,8 +1384,15 @@ struct AskView: View {
                     sourcedAnswerText(segments: segments)
                         .font(.body)
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .padding(.vertical, 11)
+                        .background {
+                            UnevenRoundedRectangle(
+                                cornerRadii: .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
+                                style: .continuous
+                            )
+                            .fill(Color(.secondarySystemGroupedBackground))
+                            .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 3)
+                        }
                         .textSelection(.enabled)
                     Spacer(minLength: 24)
                 }
@@ -1371,20 +1461,27 @@ struct AskView: View {
                 .focused($isInputFocused)
                 .submitLabel(.send)
                 .onSubmit(sendQuestion)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 11)
                 .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(settings.theme.gradient, lineWidth: 1.5)
+                        .opacity(isInputFocused ? 1 : 0)
+                        .animation(.snappy, value: isInputFocused)
+                }
 
             Button(action: sendQuestion) {
                 Image(systemName: "arrow.up")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 38, height: 38)
                     .background(settings.theme.gradient, in: Circle())
+                    .shadow(color: settings.theme.endColor.opacity(0.4), radius: 8, x: 0, y: 4)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ScaleButtonStyle())
             .disabled(questionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .opacity(questionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+            .opacity(questionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -1607,7 +1704,10 @@ struct AnswerCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
-                    .foregroundStyle(settings.theme.gradient)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 Text("Answer")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1618,8 +1718,9 @@ struct AnswerCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Button(action: onTapNote) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "note.text")
+                        .foregroundStyle(settings.theme.endColor)
                     Text(result.matchedNote.title.isEmpty ? "Untitled" : result.matchedNote.title)
                         .lineLimit(1)
                     Spacer()
@@ -1629,7 +1730,7 @@ struct AnswerCardView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -1652,185 +1753,181 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("How should the Ask tab answer you?")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
+                VStack(alignment: .leading, spacing: 22) {
+                    // Answering style
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeader("Answering Style", systemImage: "sparkles")
 
-                    ForEach(AnswerMode.allCases) { mode in
-                        Button {
-                            withAnimation(.snappy) { settings.answerMode = mode }
-                        } label: {
-                            HStack(alignment: .top, spacing: 14) {
-                                Image(systemName: mode == .aiAnswer ? "sparkles" : "arrow.right.circle.fill")
-                                    .font(.title3)
-                                    .foregroundStyle(settings.theme.endColor)
-                                    .frame(width: 28)
+                        ForEach(AnswerMode.allCases) { mode in
+                            Button {
+                                withAnimation(.snappy) { settings.answerMode = mode }
+                            } label: {
+                                HStack(alignment: .top, spacing: 14) {
+                                    Image(systemName: mode == .aiAnswer ? "sparkles" : "arrow.right.circle.fill")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 38, height: 38)
+                                        .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(mode.displayName)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                    Text(mode.explanation)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                        .multilineTextAlignment(.leading)
-                                }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(mode.displayName)
+                                            .font(.headline)
+                                            .foregroundStyle(.primary)
+                                        Text(mode.explanation)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                            .multilineTextAlignment(.leading)
+                                    }
 
-                                Spacer(minLength: 0)
+                                    Spacer(minLength: 0)
 
-                                if settings.answerMode == mode {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(settings.theme.endColor)
+                                    Image(systemName: settings.answerMode == mode ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(settings.answerMode == mode ? settings.theme.endColor : Color.secondary.opacity(0.35))
                                         .font(.title3)
                                 }
-                            }
-                            .padding(16)
-                            .cardBackground()
-                            .overlay(
-                                RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
-                                    .stroke(settings.answerMode == mode ? settings.theme.endColor : Color.clear, lineWidth: 2)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    Text("Online AI (optional)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Picker("AI Engine", selection: $settings.useOnlineAI) {
-                            Text("Offline AI").tag(false)
-                            Text("Online AI (Gemini)").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-
-                        if settings.useOnlineAI {
-                            SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
-                                .textFieldStyle(.roundedBorder)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-
-                            Text("Uses your own free Gemini API key over WiFi instead of the bundled offline model. Free tier has rate limits, and Google may use free-tier requests to improve their models.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(16)
-                    .cardBackground()
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    Text("Note Writing Pattern (optional)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        TextEditor(text: $settings.notePattern)
-                            .frame(minHeight: 90)
-                            .padding(8)
-                            .background(Color(.secondarySystemBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                        Text("Give an example of how you like notes written, e.g. \"10/10/2025 Abc Restaurant entry = 20$\" — new notes the AI creates will follow that style. Currently used by Online AI only.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(16)
-                    .cardBackground()
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    Text("Theme")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                        ForEach(AppTheme.allCases) { theme in
-                            Button {
-                                withAnimation(.snappy) { settings.theme = theme }
-                            } label: {
-                                VStack(spacing: 8) {
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(theme.gradient)
-                                        .frame(height: 44)
-                                        .overlay(alignment: .topTrailing) {
-                                            if settings.theme == theme {
-                                                Image(systemName: "checkmark.circle.fill")
-                                                    .foregroundStyle(.white)
-                                                    .padding(6)
-                                            }
-                                        }
-                                    Text(theme.displayName)
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.primary)
-                                }
-                                .padding(12)
+                                .padding(16)
                                 .cardBackground()
                                 .overlay(
                                     RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
-                                        .stroke(settings.theme == theme ? theme.endColor : Color.clear, lineWidth: 2)
+                                        .stroke(settings.answerMode == mode ? settings.theme.endColor : Color.clear, lineWidth: 2)
                                 )
                             }
                             .buttonStyle(.plain)
                         }
                     }
 
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    Text("Backup")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-
+                    // AI engine
                     VStack(alignment: .leading, spacing: 12) {
-                        Button {
-                            prepareExport()
-                        } label: {
-                            Label("Export All Notes", systemImage: "square.and.arrow.up")
-                        }
+                        sectionHeader("AI Engine", systemImage: "cpu")
 
-                        if let pendingExportURL {
-                            ShareLink(item: pendingExportURL) {
-                                Label("Share Backup File", systemImage: "arrow.up.doc")
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("AI Engine", selection: $settings.useOnlineAI) {
+                                Text("Offline AI").tag(false)
+                                Text("Online AI (Gemini)").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+
+                            if settings.useOnlineAI {
+                                SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
+                                    .textFieldStyle(.roundedBorder)
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+
+                                Text("Uses your own free Gemini API key over WiFi instead of the bundled offline model. Free tier has rate limits, and Google may use free-tier requests to improve their models.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
+                        .padding(16)
+                        .cardBackground()
+                    }
 
-                        Divider()
+                    // Note writing pattern
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeader("Note Writing Pattern", systemImage: "text.format")
 
-                        Button {
-                            showingImporter = true
-                        } label: {
-                            Label("Import Notes", systemImage: "square.and.arrow.down")
-                        }
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextEditor(text: $settings.notePattern)
+                                .frame(minHeight: 90)
+                                .padding(8)
+                                .background(Color(.secondarySystemBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                        Text("Export saves all your notes to a file you can AirDrop, email, or save to iCloud Drive — keep it somewhere off the phone. After a reset or reinstall, use Import and pick that file to bring everything back. Importing never deletes existing notes; it only adds new ones and updates any that match.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if let importStatusMessage {
-                            Text(importStatusMessage)
-                                .font(.caption.weight(.medium))
+                            Text("Give an example of how you like notes written, e.g. \"10/10/2025 Abc Restaurant entry = 20$\" — new notes the AI creates will follow that style. Currently used by Online AI only.")
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(16)
+                        .cardBackground()
                     }
-                    .padding(16)
-                    .cardBackground()
+
+                    // Theme
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeader("Theme", systemImage: "paintpalette")
+
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                            ForEach(AppTheme.allCases) { theme in
+                                Button {
+                                    withAnimation(.snappy) { settings.theme = theme }
+                                } label: {
+                                    VStack(spacing: 8) {
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .fill(theme.gradient)
+                                            .frame(height: 48)
+                                            .overlay(alignment: .bottomLeading) {
+                                                VStack(alignment: .leading, spacing: 4) {
+                                                    Capsule().fill(.white.opacity(0.85)).frame(width: 34, height: 5)
+                                                    Capsule().fill(.white.opacity(0.5)).frame(width: 52, height: 5)
+                                                }
+                                                .padding(8)
+                                            }
+                                            .overlay(alignment: .topTrailing) {
+                                                if settings.theme == theme {
+                                                    Image(systemName: "checkmark.circle.fill")
+                                                        .foregroundStyle(.white)
+                                                        .padding(6)
+                                                }
+                                            }
+                                        Text(theme.displayName)
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(.primary)
+                                    }
+                                    .padding(12)
+                                    .cardBackground()
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
+                                            .stroke(settings.theme == theme ? theme.endColor : Color.clear, lineWidth: 2)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    // Backup
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionHeader("Backup", systemImage: "externaldrive")
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Button {
+                                prepareExport()
+                            } label: {
+                                actionRowLabel("Export All Notes", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.plain)
+
+                            if let pendingExportURL {
+                                ShareLink(item: pendingExportURL) {
+                                    actionRowLabel("Share Backup File", systemImage: "arrow.up.doc")
+                                }
+                            }
+
+                            Divider()
+
+                            Button {
+                                showingImporter = true
+                            } label: {
+                                actionRowLabel("Import Notes", systemImage: "square.and.arrow.down")
+                            }
+                            .buttonStyle(.plain)
+
+                            Text("Export saves all your notes to a file you can AirDrop, email, or save to iCloud Drive — keep it somewhere off the phone. After a reset or reinstall, use Import and pick that file to bring everything back. Importing never deletes existing notes; it only adds new ones and updates any that match.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if let importStatusMessage {
+                                Text(importStatusMessage)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(16)
+                        .cardBackground()
+                    }
                 }
                 .padding(20)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(AmbientBackground())
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -1841,6 +1938,30 @@ struct SettingsView: View {
                 handleImport(result)
             }
         }
+    }
+
+    private func sectionHeader(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(settings.theme.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func actionRowLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func prepareExport() {
@@ -1900,8 +2021,6 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Root
-
 // MARK: - Date (Reminders)
 
 enum DateFilterMode: Equatable {
@@ -1922,7 +2041,11 @@ struct DateView: View {
     @State private var rangeEnd = Date().addingTimeInterval(7 * 24 * 60 * 60)
     @State private var path: [NotesListView.NoteDestination] = []
     @State private var categoryFilter: String? = nil
-    @State private var showingCategoryFilter = false
+
+    private var isDateRangeSelected: Bool {
+        if case .dateRange = filter { return true }
+        return false
+    }
 
     private var availableCategories: [String] {
         Set(notesStore.notes.filter { $0.reminderDate != nil }.map { $0.categoryEnglish }.filter { !$0.isEmpty }).sorted()
@@ -1951,77 +2074,63 @@ struct DateView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                if reminderNotes.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Reminders", systemImage: "calendar")
-                    } description: {
-                        Text("Ask the AI to remind you about a note, and it'll show up here.")
+            VStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        SelectablePill(title: "Most urgent", systemImage: "flame.fill", isSelected: filter == .mostUrgent) {
+                            withAnimation(.snappy) { filter = .mostUrgent }
+                        }
+                        SelectablePill(title: "Least urgent", isSelected: filter == .leastUrgent) {
+                            withAnimation(.snappy) { filter = .leastUrgent }
+                        }
+                        SelectablePill(title: "Date range", systemImage: "calendar", isSelected: isDateRangeSelected) {
+                            showingDateRangeSheet = true
+                        }
+                        SelectablePill(title: "Done", systemImage: "checkmark.circle", isSelected: filter == .completedOnly) {
+                            withAnimation(.snappy) { filter = .completedOnly }
+                        }
+                        SelectablePill(title: "Not done", systemImage: "circle", isSelected: filter == .notCompletedOnly) {
+                            withAnimation(.snappy) { filter = .notCompletedOnly }
+                        }
                     }
-                } else {
-                    List {
-                        ForEach(Array(reminderNotes.enumerated()), id: \.element.id) { index, note in
-                            Button {
-                                path.append(NotesListView.NoteDestination(id: note.id))
-                            } label: {
-                                reminderRow(note: note, urgencyColor: urgencyColor(index: index, total: reminderNotes.count))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                }
+
+                if !availableCategories.isEmpty {
+                    CategoryChipsRow(categories: availableCategories, selection: $categoryFilter, allLabel: "All Categories")
+                }
+
+                Group {
+                    if reminderNotes.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Reminders", systemImage: "calendar")
+                        } description: {
+                            Text("Ask the AI to remind you about a note, and it'll show up here.")
+                        }
+                    } else {
+                        List {
+                            ForEach(Array(reminderNotes.enumerated()), id: \.element.id) { index, note in
+                                Button {
+                                    path.append(NotesListView.NoteDestination(id: note.id))
+                                } label: {
+                                    reminderRow(note: note, urgencyColor: urgencyColor(index: index, total: reminderNotes.count))
+                                }
+                                .buttonStyle(.plain)
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                             }
-                            .buttonStyle(.plain)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                         }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .animation(.snappy, value: reminderNotes)
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .animation(.snappy, value: reminderNotes)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(.systemGroupedBackground))
+            .background(AmbientBackground())
             .navigationTitle("Date")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 6) {
-                        if let categoryFilter {
-                            Text(categoryFilter)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(settings.theme.gradient, in: Capsule())
-                                .foregroundStyle(.white)
-                                .onTapGesture { self.categoryFilter = nil }
-                        }
-
-                        Button {
-                            showingCategoryFilter = true
-                        } label: {
-                            Image(systemName: categoryFilter == nil ? "tag" : "tag.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(settings.theme.gradient, in: Circle())
-                        }
-
-                        Menu {
-                            Button("Most urgent → least urgent") { filter = .mostUrgent }
-                            Button("Least urgent → most urgent") { filter = .leastUrgent }
-                            Button("Date range…") { showingDateRangeSheet = true }
-                            Button("What's done") { filter = .completedOnly }
-                            Button("What's not done") { filter = .notCompletedOnly }
-                        } label: {
-                            Image(systemName: "arrow.up.arrow.down")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(settings.theme.gradient, in: Circle())
-                        }
-                    }
-                }
-            }
-            .sheet(isPresented: $showingCategoryFilter) {
-                CategoryFilterSheet(categories: availableCategories, selectedCategory: $categoryFilter, allLabel: "All Reminders")
-            }
             .sheet(isPresented: $showingDateRangeSheet) {
                 dateRangeSheet
             }
@@ -2064,9 +2173,10 @@ struct DateView: View {
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.headline)
+                    .fontDesign(.rounded)
                     .foregroundStyle(note.isReminderCompleted ? .secondary : .primary)
                     .strikethrough(note.isReminderCompleted)
 
@@ -2076,21 +2186,21 @@ struct DateView: View {
                     .lineLimit(2)
 
                 if let date = note.reminderDate {
-                    Text(reminderDateFormatter.string(from: date))
+                    Label(reminderDateFormatter.string(from: date), systemImage: "calendar")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(note.isReminderCompleted ? Color.secondary : urgencyColor)
                 }
             }
 
             Spacer(minLength: 0)
         }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(urgencyColor.opacity(note.isReminderCompleted ? 0 : 0.7), lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(urgencyColor.opacity(note.isReminderCompleted ? 0 : 0.6), lineWidth: 1.5)
         )
-        .shadow(color: urgencyColor.opacity(note.isReminderCompleted ? 0 : 0.55), radius: 10, x: 0, y: 0)
+        .shadow(color: urgencyColor.opacity(note.isReminderCompleted ? 0 : 0.3), radius: 12, x: 0, y: 4)
     }
 
     private func toggleCompleted(_ note: Note) {
@@ -2126,6 +2236,8 @@ struct DateView: View {
     }
 }
 
+// MARK: - Root
+
 struct ContentView: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -2134,7 +2246,7 @@ struct ContentView: View {
             NotesListView()
                 .tabItem { Label("Notes", systemImage: "note.text") }
             AskView()
-                .tabItem { Label("Ask", systemImage: "questionmark.bubble") }
+                .tabItem { Label("Ask", systemImage: "sparkles") }
             DateView()
                 .tabItem { Label("Date", systemImage: "calendar") }
         }
