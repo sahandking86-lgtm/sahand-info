@@ -501,7 +501,7 @@ enum AIActions {
                 : "Delete \(victims.count) notes?",
             detail: victims.count == 1
                 ? "It goes away from the Notes tab and the Date tab. Undo brings it back from the banner straight after."
-                : "“\(names.joined(separator: ”, ”))”\(extra) will go. Undo brings them all back.",
+                : "“\(names.joined(separator: ", "))”\(extra) will go. Undo brings them all back.",
             noteIDs: victims.map { $0.id },
             noteTitles: names,
             isDestructive: true,
