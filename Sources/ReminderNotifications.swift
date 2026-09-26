@@ -27,19 +27,19 @@ final class ReminderNotificationDelegate: NSObject, UNUserNotificationCenterDele
 
     /// Tapping the notification is treated as "show me that note", so a reminder is a way into the
     /// app rather than a dead-end banner.
+    ///
+    /// The id is parked on the scheduler instead of being posted through NotificationCenter: when iOS
+    /// launches the app from a banner, the delegate runs before any view has subscribed to anything,
+    /// and the tap used to disappear.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         if let idString = response.notification.request.content.userInfo["noteID"] as? String,
-           let url = URL(string: "sahandinfo://note/" + idString) {
-            NotificationCenter.default.post(name: .sahandInfoReminderTapped, object: url)
+           let id = UUID(uuidString: idString) {
+            Task { @MainActor in ReminderScheduler.shared.noteTappedFromNotification(id) }
         }
         completionHandler()
     }
-}
-
-extension Notification.Name {
-    static let sahandInfoReminderTapped = Notification.Name("sahandInfoReminderTapped")
 }
 
 @MainActor
@@ -52,6 +52,8 @@ final class ReminderScheduler: ObservableObject {
     /// Count of what is currently on the system schedule, shown in Settings so "no notification"
     /// can be told apart from "nothing to notify about".
     @Published private(set) var scheduledCount = 0
+    /// A reminder the user tapped, waiting for the root view to open it.
+    @Published var pendingNoteToOpen: UUID?
 
     private let center = UNUserNotificationCenter.current()
     private let enabledKey = "sahand_info_reminder_notifications_v1"
@@ -75,6 +77,10 @@ final class ReminderScheduler: ObservableObject {
     }
 
     var notificationsEnabled: Bool { notificationsWanted }
+
+    func noteTappedFromNotification(_ id: UUID) {
+        pendingNoteToOpen = id
+    }
 
     func configureOnce() {
         guard !didConfigure else { return }

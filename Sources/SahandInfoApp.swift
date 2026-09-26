@@ -562,7 +562,7 @@ final class NotesStore: ObservableObject {
     /// Reminders are a state, not an edit: ticking one should not reorder the list by "last edited",
     /// but it must still be undoable, so it goes through the same path.
     func setReminderCompleted(_ completed: Bool, for id: UUID) {
-        mutate(nil) { list in
+        mutate(completed ? "Marked a reminder done" : "Reopened a reminder") { list in
             var next = list
             guard let index = next.firstIndex(where: { $0.id == id }) else { return list }
             next[index].isReminderCompleted = completed
@@ -3553,6 +3553,7 @@ struct ContentView: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var coordinator: AppCoordinator
     @EnvironmentObject var notesStore: NotesStore
+    @EnvironmentObject var reminders: ReminderScheduler
 
     var body: some View {
         // The selection lives on the coordinator, not in here, which is what finally lets the
@@ -3580,9 +3581,9 @@ struct ContentView: View {
             .animation(.snappy, value: coordinator.notice)
             .animation(.snappy, value: notesStore.undoLabel)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .sahandInfoReminderTapped)) { notification in
-            guard let url = notification.object as? URL,
-                  let id = UUID(uuidString: url.lastPathComponent) else { return }
+        .onChange(of: reminders.pendingNoteToOpen) { _, id in
+            guard let id else { return }
+            reminders.pendingNoteToOpen = nil
             coordinator.reveal(noteID: id, in: notesStore)
         }
     }
