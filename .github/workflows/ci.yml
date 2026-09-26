@@ -68,3 +68,49 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+
+      # Every push, not just manual IPA runs: assert the produced bundle is shaped the way a
+      # container launcher (LiveContainer) needs it - a real .app, an Info.plist whose
+      # CFBundleExecutable resolves to an existing Mach-O file, and the icon/launch-screen keys
+      # that decide whether the icon shows and the app runs full-screen. It also mirrors project.yml
+      # so a plist that drifted from the spec fails here instead of on a phone. Facts are emitted
+      # as annotations: they are readable straight from the API, unlike log text.
+      - name: Verify built app bundle is launchable
+        run: |
+          app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "::error::no .app produced by xcodebuild"; exit 1; }
+          plist="$app/Info.plist"
+          exec_name=$(plutil -extract CFBundleExecutable raw "$plist")
+          test -f "$app/$exec_name" || { echo "::error::'$app' has no executable named '$exec_name'"; exit 1; }
+          file "$app/$exec_name" | grep -q "Mach-O" || { echo "::error::$exec_name is not a Mach-O binary"; exit 1; }
+
+          # The two numbers a launcher actually keys on: bundle id and short version.
+          bid=$(plutil -extract CFBundleIdentifier raw "$plist")
+          ver=$(plutil -extract CFBundleShortVersionString raw "$plist")
+          want_bid=$(awk '/PRODUCT_BUNDLE_IDENTIFIER:/ {gsub(/[",]/,"",$2); print $2; exit}' project.yml)
+          want_ver=$(awk '/MARKETING_VERSION:/ {gsub(/[",]/,"",$2); print $2; exit}' project.yml)
+          [ -z "$want_bid" ] || [ "$bid" = "$want_bid" ] || { echo "::error::built id '$bid' != project.yml '$want_bid'"; exit 1; }
+          [ -z "$want_ver" ] || [ "$ver" = "$want_ver" ] || { echo "::error::built version '$ver' != project.yml '$want_ver'"; exit 1; }
+
+          # actool injects these; if they are missing the icon is gone or the app is letterboxed.
+          icon=$(plutil -extract CFBundleIcons json "$plist" >/dev/null 2>&1 && echo present || echo "absent (actool did not inject)")
+          launch=$(plutil -extract UILaunchScreen json "$plist" >/dev/null 2>&1 && echo present || echo absent)
+          car=$([ -f "$app/Assets.car" ] && echo present || echo absent)
+          priv=$([ -f "$app/PrivacyInfo.xcprivacy" ] && echo present || echo absent)
+          archs=$(lipo -archs "$app/$exec_name" 2>/dev/null || echo unknown)
+          case " $archs " in *" i386 "*|*" x86_64 "*|*" armv7 "*)
+            echo "::error::binary carries simulator/32-bit slices: $archs"; exit 1;;
+          esac
+          sig=$(codesign -dv "$app" 2>&1 | head -n 1)
+
+          echo "::warning::[sahand-info] bundle=$(basename "$app") id=$bid version=$ver exec=$exec_name archs=$archs size=$(du -sh "$app" | cut -f1)"
+          echo "::warning::[sahand-info] Assets.car=$car privacy=$priv icon=$icon launchscreen=$launch"
+          echo "::warning::[sahand-info] signature=$sig"
+          echo "::warning::[sahand-info] plist=$(plutil -convert json -o - "$plist" 2>/dev/null | tr -d '\n')"
+          {
+            echo "### Built bundle (this is what build.yml ships)"
+            echo "- \`$(basename "$app")\` — id \`$bid\`, version \`$ver\`, arch \`$archs\`"
+            echo "- executable \`$exec_name\`: present, Mach-O"
+            echo "- Assets.car: $car · PrivacyInfo: $priv · CFBundleIcons: $icon · UILaunchScreen: $launch"
+            echo "- signature: $sig (unsigned on purpose - LiveContainer re-signs it)"
+          } >> "$GITHUB_STEP_SUMMARY"
