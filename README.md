@@ -77,9 +77,10 @@ SideStore 0.6.0+ / AltStore 2.0+ (or TrollStore). Everything the app does keeps 
 the container, except what needs a real install: no home-screen icon, no notification delivery,
 and haptics are unreliable.
 
-**Sideloadly / AltStore installs**: those check `UIRequiredDeviceCapabilities`, which is why
-`Sources/Info.plist` asks for `arm64` rather than the legacy `armv7` (an `armv7` requirement
-makes current iPhones refuse the install). LiveContainer ignores that key.
+**Sideloadly / AltStore installs**: those check `UIRequiredDeviceCapabilities`. This file used to
+declare the legacy `armv7`, which makes current (64-bit-only) iPhones refuse the install, so the
+key is now absent entirely — no requirement means no gate, and LiveContainer ignores it either way.
+If you ever need to pin a capability, add the key back with `arm64`.
 
 ## Layout
 
