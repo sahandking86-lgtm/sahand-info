@@ -345,7 +345,7 @@ private struct UndoBar: View {
     @EnvironmentObject private var notesStore: NotesStore
 
     var body: some View {
-        if let label = notesStore.undoLabel, notesStore.canUndo {
+        if let label = notesStore.undoLabel, notesStore.canUndo, notesStore.undoOfferVisible {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.uturn.backward")
                     .font(.caption.weight(.bold))
@@ -479,8 +479,12 @@ final class NotesStore: ObservableObject {
     }
 
     @Published private(set) var revision: Int = 0
-    /// What the Undo banner offers right now; nil means there is nothing to undo.
+    /// What the most recent change was called. The chat's own Undo chip compares against this, so it
+    /// can tell "undo the thing this bubble did" from "undo whatever happened last".
     @Published private(set) var undoLabel: String? = nil
+    /// Whether the banner is showing. Pressing "Later" hides the banner; it does not make the change
+    /// un-undoable, and the assistant can still roll it back from the chat.
+    @Published private(set) var undoOfferVisible = false
 
     private var undoStack: [(label: String, notes: [Note])] = []
     private let undoDepth = 15
@@ -512,9 +516,8 @@ final class NotesStore: ObservableObject {
     func note(id: UUID) -> Note? { notes.first(where: { $0.id == id }) }
     var canUndo: Bool { !undoStack.isEmpty }
 
-    /// The Undo bar is an offer, not a hostage: dismissing it must not destroy the snapshot, because
-    /// the assistant can still undo the same change from the chat.
-    func hideUndoOffer() { undoLabel = nil }
+    /// The Undo bar is an offer, not a hostage: putting it away must not destroy the snapshot.
+    func hideUndoOffer() { undoOfferVisible = false }
 
     /// Notes the Notes tab would actually show for the current search and category chip. The
     /// assistant needs this to say "3 notes match" truthfully instead of counting everything.
@@ -606,6 +609,7 @@ final class NotesStore: ObservableObject {
         // back one step rather than bouncing between two states.
         notes = last.notes
         undoLabel = undoStack.last?.label
+        undoOfferVisible = undoLabel != nil
         return last.label
     }
 
@@ -615,6 +619,7 @@ final class NotesStore: ObservableObject {
         undoStack.append((label ?? "Changed a note", notes))
         if undoStack.count > undoDepth { undoStack.removeFirst() }
         undoLabel = label ?? "Changed a note"
+        undoOfferVisible = true
         notes = next
     }
 
@@ -3684,6 +3689,7 @@ struct ContentView: View {
             .padding(.bottom, 96)
             .padding(.top, 8)
             .animation(.snappy, value: coordinator.notice)
+            .animation(.snappy, value: notesStore.undoOfferVisible)
             .animation(.snappy, value: notesStore.undoLabel)
         }
         .onChange(of: reminders.pendingNoteToOpen) { _, id in
