@@ -565,13 +565,6 @@ enum AIActions {
         return result
     }
 
-    /// "Rewrite" is only worth a confirmation when a real amount of text disappears. Half was the
-    /// old cut-off, which let a rewrite that dropped 40% of a note through silently.
-    private static func losesTooMuch(_ proposed: String, comparedTo original: String) -> Bool {
-        guard !original.isEmpty else { return false }
-        return proposed.count * 4 < original.count * 3
-    }
-
     /// A rewrite is only worth a confirmation when a real amount of text disappears. Half the
     /// original length was the old cut-off, which let a rewrite that dropped 40% of a note through
     /// without asking.
