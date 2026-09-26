@@ -2620,6 +2620,17 @@ struct AnswerCardView: View {
 
 // MARK: - Settings tab
 
+/// What the install is, straight from the bundle, so the footer can't disagree with the build
+/// someone actually installed.
+enum AppInfo {
+    static var versionLine: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "Version \(short) (build \(build))"
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var notesStore: NotesStore
@@ -2661,7 +2672,7 @@ struct SettingsView: View {
                     dangerSection
 
                     // App version: edit or delete this one line to change/hide it.
-                    Text("Version 2.1")
+                    Text(AppInfo.versionLine)
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)

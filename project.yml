@@ -47,11 +47,13 @@ targets:
         # (no App Groups, no keychain access groups, no push), and note storage keys are explicit
         # strings, so this is safe. Delete the old "Sahand Info" row whenever you like.
         PRODUCT_BUNDLE_IDENTIFIER: com.sahandinfo.notes
-        # Kept at 2.1 so LiveContainer's own row reads "2.1 - com.sahandinfo.notes" and matches
-        # the "Version 2.1" line in Settings. The Settings text is its own literal on purpose (it
-        # is the one you edit or delete), so if you bump one, bump the other.
-        MARKETING_VERSION: "2.1"
-        CURRENT_PROJECT_VERSION: "1"
+        # Settings prints CFBundleShortVersionString/CFBundleVersion straight from the bundle, so
+        # LiveContainer's row and the app's own footer can no longer disagree. Bump the marketing
+        # version when behavior changes noticeably - it is the quickest way on the phone to tell
+        # which build you are holding. Updating under the same bundle id keeps your notes; only a
+        # bundle *id* change loses the container's path, which is the trap documented above.
+        MARKETING_VERSION: "2.2"
+        CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "5.0"
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
