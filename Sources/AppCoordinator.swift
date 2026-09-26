@@ -54,6 +54,9 @@ struct AppNotice: Identifiable, Equatable {
     var noteID: UUID? = nil
     /// "Undo" is a different action from opening a note, so the banner says what it will do.
     var undoes = false
+    /// "Review" on a pending change jumps to the tab where the buttons are, rather than being a
+    /// label with no action behind it.
+    var goToAsk = false
 }
 
 @MainActor
@@ -196,7 +199,7 @@ final class AppCoordinator: ObservableObject {
 
     func request(_ confirmation: PendingConfirmation) {
         pendingConfirmation = confirmation
-        say("\(confirmation.question) Confirm in the Ask tab.", actionLabel: "Review")
+        say(confirmation.question, actionLabel: "Review", goToAsk: true)
     }
 
     /// A user typing "yes"/"do it"/"confirm" is an acceptable answer to a pending change; making
