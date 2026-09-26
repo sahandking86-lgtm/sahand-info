@@ -222,6 +222,15 @@ private let absoluteDateFormatter: DateFormatter = {
     return formatter
 }()
 
+/// Version shown at the bottom of Settings. Read from the bundle instead of hardcoded: Sources/Info.plist
+/// sets CFBundleShortVersionString to $(MARKETING_VERSION), which project.yml defines, so the label and the
+/// build number can never drift apart. The literal is only the fallback for a build with no version set —
+/// note it needs a fresh `xcodegen generate` after a version bump to show up.
+private let appVersionString: String = {
+    let bundled = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    return (bundled?.isEmpty == false) ? bundled! : "2.1"
+}()
+
 // MARK: - Model
 
 struct Note: Identifiable, Codable, Equatable {
@@ -1924,6 +1933,14 @@ struct SettingsView: View {
                         .padding(16)
                         .cardBackground()
                     }
+
+                    // Quiet footer, last thing you see when you scroll the sheet.
+                    Text("Version \(appVersionString)")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 6)
+                        .padding(.bottom, 4)
                 }
                 .padding(20)
             }
