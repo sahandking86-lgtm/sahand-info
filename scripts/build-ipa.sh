@@ -46,7 +46,7 @@ echo "→ packaging SahandInfo.ipa"
 rm -rf Payload SahandInfo.ipa
 mkdir -p Payload
 cp -R "$APP_PATH" Payload/
-zip -qry SahandInfo.ipa Payload
+zip -r SahandInfo.ipa Payload
 rm -rf Payload
 
 echo

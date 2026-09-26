@@ -56,7 +56,9 @@ jobs:
           app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
           test -n "$app" || { echo "no .app produced"; exit 1; }
           cp -R "$app" Payload/
-          zip -qry SahandInfo.ipa Payload
+          # -r with no -y/-9: byte-for-byte the same invocation main uses, so packaging is
+          # never a variable when comparing a working main IPA against a branch IPA.
+          zip -r SahandInfo.ipa Payload
           rm -rf Payload
           ls -lh SahandInfo.ipa
 
