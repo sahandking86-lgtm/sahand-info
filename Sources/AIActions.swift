@@ -572,14 +572,9 @@ enum AIActions {
         return proposed.count * 4 < original.count * 3
     }
 
-    /// The category as it is actually spelled on the notes, or nil if there is no such category.
-    private static func canonicalCategory(_ wanted: String, in store: NotesStore) -> String? {
-        if let exact = store.allCategories.first(where: { $0 == wanted }) { return exact }
-        return store.allCategories.first(where: { $0.caseInsensitiveCompare(wanted) == .orderedSame })
-    }
-
-    /// A rewrite is only worth a confirmation when a real amount of text disappears. Half was the old
-    /// cut-off, which let a rewrite that dropped 40% of a note through silently.
+    /// A rewrite is only worth a confirmation when a real amount of text disappears. Half the
+    /// original length was the old cut-off, which let a rewrite that dropped 40% of a note through
+    /// without asking.
     private static func losesTooMuch(_ proposed: String, comparedTo original: String) -> Bool {
         guard !original.isEmpty else { return false }
         return proposed.count * 4 < original.count * 3

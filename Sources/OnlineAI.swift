@@ -257,19 +257,21 @@ enum OnlineAI {
                     if let reason = (json["promptFeedback"] as? [String: Any])?["blockReason"] as? String {
                         return .failure(.refusedByModel(reason))
                     }
-                    guard let candidates = json["candidates"] as? [[String: Any]],
-                          let content = candidates.first?["content"] as? [String: Any],
+                    let candidates = json["candidates"] as? [[String: Any]] ?? []
+                    let finishReason = candidates.first?["finishReason"] as? String
+                    guard let content = candidates.first?["content"] as? [String: Any],
                           let parts = content["parts"] as? [[String: Any]]
                     else {
-                        let reason = (candidates?.first?["finishReason"] as? String) ?? ""
-                        return .failure(reason == "MAX_TOKENS" ? .cutOff : .badResponse)
+                        return .failure(finishReason == "MAX_TOKENS" ? .cutOff : .badResponse)
                     }
                     let text = parts
                         .filter { ($0["thought"] as? Bool) != true }
                         .compactMap { $0["text"] as? String }
                         .joined()
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return .failure(.badResponse) }
+                    guard !text.isEmpty else {
+                        return .failure(finishReason == "MAX_TOKENS" ? .cutOff : .badResponse)
+                    }
                     return .reply(text)
                 }
 
