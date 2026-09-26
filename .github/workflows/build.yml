@@ -75,7 +75,15 @@ jobs:
           exec_name=$(plutil -extract CFBundleExecutable raw "$app/Info.plist")
           test -f "$app/$exec_name" || { echo "::error::$app is missing its executable '$exec_name'"; exit 1; }
           file "$app/$exec_name" | grep -q "Mach-O" || { echo "::error::$exec_name is not a Mach-O binary"; exit 1; }
-          test -f "$app/Assets.car" || echo "warning: no compiled asset catalog (no app icon)"
+          car=$([ -f "$app/Assets.car" ] && echo yes || echo no)
+          priv=$([ -f "$app/PrivacyInfo.xcprivacy" ] && echo yes || echo no)
+          prov=$([ -f "$app/embedded.mobileprovision" ] && echo yes || echo no)
+          keys=$(plutil -p "$app/Info.plist" | grep -c '":')
+          plist_line=$(plutil -convert json -o - "$app/Info.plist" 2>/dev/null | tr -d '{}"' | tr ',' ' ' | tr -s ' ')
+          exec_line=$(otool -l "$app/$exec_name" 2>/dev/null | grep -A4 -m1 LC_BUILD_VERSION | tr -s ' \n' ' ')
+          echo "::warning::[sahand-info] bundle=$(basename "$app") exec=$exec_name size=$(du -sh "$app" | cut -f1) Assets.car=$car privacy=$priv provisioned=$prov plist_keys=$keys"
+          echo "::warning::[sahand-info] plist: $plist_line"
+          echo "::warning::[sahand-info] macho: ${exec_line:-unavailable}"
           {
             echo "### Packaged app"
             echo "- bundle: \`$(basename "$app")\`"

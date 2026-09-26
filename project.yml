@@ -38,7 +38,15 @@ targets:
         # the path it spawns nothing. Same reason main has always launched fine here.
         # The Home Screen label is "Sahand Info" either way (CFBundleDisplayName in Info.plist).
         PRODUCT_NAME: "Sahand Info"
-        PRODUCT_BUNDLE_IDENTIFIER: com.sahandinfo.app
+        # New identifier on purpose. LiveContainer keys each container entry by bundle id and
+        # remembers that entry's .app path; the half-finished install attempt left an entry whose
+        # path no longer matches any payload, which is what produced
+        # "Could not create process: No such file or directory (errno: 2)" on launch even though
+        # the .ipa verified clean in CI. A new id means a brand-new entry with a fresh path, so
+        # there is nothing stale to clear out. Nothing in the app reads its own bundle id
+        # (no App Groups, no keychain access groups, no push), and note storage keys are explicit
+        # strings, so this is safe. Delete the old "Sahand Info" row whenever you like.
+        PRODUCT_BUNDLE_IDENTIFIER: com.sahandinfo.notes
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
@@ -46,10 +54,9 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""
         TARGETED_DEVICE_FAMILY: "1"
-        # The Info.plist is hand-maintained (see Sources/Info.plist), so Xcode must not
-        # synthesize one from INFOPLIST_KEY_* build settings. That also means keys like
-        # UILaunchScreen have to live in the plist file itself.
-        GENERATE_INFOPLIST_FILE: NO
+        # Sources/Info.plist is hand-maintained and is what main used (found automatically by
+        # XcodeGen under Sources/), so no INFOPLIST_KEY_* build settings are in play: keys like
+        # UILaunchScreen live in the plist file itself.
         INFOPLIST_FILE: Sources/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 # An explicit shared scheme, so `xcodebuild -scheme SahandInfo` works from CI on a
