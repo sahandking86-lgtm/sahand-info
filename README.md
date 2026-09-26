@@ -68,10 +68,35 @@ the bundle.
 
 ### Building an IPA
 
-- **From CI**: Actions → **Build IPA** → *Run workflow*. Toggle *offline_model* off for a
-  quick online-only build. The run uploads an unsigned `SahandInfo.ipa` artifact.
+- **From CI**: Actions → **Build IPA** → *Run workflow*. Pick the branch, then:
+  - *offline_model* = **off** → small, fast build, Online AI (Gemini) only.
+  - *offline_model* = **on** (default) → bundles the ~2 GB model. Set *model_url* to
+    something smaller if you're testing on a phone, e.g.
+    `https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf`
+    (~1.1 GB) — anything ending in `.gguf` works, the script saves it as `model.gguf`.
+  The run uploads an unsigned `SahandInfo.ipa` artifact.
 - **Locally**: `./scripts/build-ipa.sh` (or `WITH_MODEL=0 ./scripts/build-ipa.sh`), which runs
   the exact same steps as the workflow.
+
+### Testing on a real device
+
+The download from Actions is `SahandInfo-ipa.zip`; unzip it to get `SahandInfo.ipa`
+(that zip wrapper trips people up — the `.ipa` is *inside* it).
+
+- **LiveContainer** is the easy path for testing, since its whole trick is running IPAs
+  without a normal signature: with JIT available codesign is bypassed entirely, and in
+  JIT-less mode LiveContainer re-signs the app with the SideStore/AltStore certificate it
+  already has. So this unsigned artifact is installable as-is — no re-signing step needed.
+  Requires LiveContainer installed via SideStore 0.6.0+ / AltStore 2.0+ (or TrollStore).
+- **Everything the app does still works in a container** except things that need a real
+  app install: no home-screen icon, no notification delivery, haptics are unreliable.
+- The offline model is the risky part in a container: LiveContainer runs the app inside its
+  own process, so llama.cpp's ~1.5–2 GB resident footprint competes with the container's
+  memory limit and jetsam will kill it on 4 GB devices. Use the 1.5B URL above, or install
+  a standalone copy via TrollStore/Sideloadly for serious offline testing.
+- **Sideloadly / AltStore installs**: those check `UIRequiredDeviceCapabilities`, which is why
+  `Sources/Info.plist` now asks for `arm64` rather than the legacy `armv7` (an `armv7`
+  requirement makes current iPhones refuse the install). LiveContainer ignores that key.
 
 The IPA is **unsigned** — there is no certificate or provisioning profile in this repo. Install
 it by letting AltStore or Sideloadly re-sign it with your own Apple ID, or set a real

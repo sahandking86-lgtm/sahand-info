@@ -6,6 +6,10 @@ on:
         description: "Bundle the ~2 GB offline AI model (Resources/model.gguf)"
         type: boolean
         default: true
+      model_url:
+        description: "Optional GGUF URL override; empty = default Qwen2.5-3B q4_k_m (~2 GB)"
+        type: string
+        default: ""
 
 # Two runs of this workflow are pointless and the model download is heavy.
 concurrency:
@@ -23,6 +27,9 @@ jobs:
 
       - name: Download local AI model
         if: ${{ inputs.offline_model }}
+        env:
+          # An empty input falls through to the script's own default URL.
+          MODEL_URL: ${{ inputs.model_url }}
         run: bash scripts/fetch-model.sh
 
       # Skipped on purpose: the app builds and runs without it, and Sources/LocalAI.swift
@@ -46,6 +53,23 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+
+      # Cheap regression net: the two resources that are easiest to lose silently are the
+      # offline model (gitignored) and the app icon (needs the Info.plist keys actool injects).
+      # Hard-fails if the executable is missing; reports the rest into the run summary.
+      - name: Verify app bundle
+        run: |
+          app="build/Build/Products/Release-iphoneos/Sahand Info.app"
+          exec_name=$(plutil -extract CFBundleExecutable raw "$app/Info.plist")
+          test -f "$app/$exec_name"
+          {
+            echo "## App bundle"
+            echo "- executable: \`$exec_name\`"
+            echo "- UILaunchScreen: $(plutil -extract UILaunchScreen json "$app/Info.plist" >/dev/null 2>&1 && echo present || echo MISSING)"
+            echo "- app icon wired up: $(plutil -extract CFBundleIcons json "$app/Info.plist" >/dev/null 2>&1 && echo yes || echo 'no (actool did not inject it)')"
+            echo "- model.gguf: $( [ -f "$app/model.gguf" ] && du -h "$app/model.gguf" | cut -f1 || echo 'absent — online-only build' )"
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -n 6 "$GITHUB_STEP_SUMMARY"
 
       - name: Package IPA
         run: |
