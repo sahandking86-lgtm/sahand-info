@@ -25,6 +25,10 @@ enum AIFailure: Equatable {
     case cancelled
     case blockedBySecurity
     case badResponse
+    /// The model answered with 200 and nothing usable: a safety refusal, or an answer that ran out of
+    /// tokens in the middle. Both need saying, not reporting as a parse failure.
+    case refusedByModel(String)
+    case cutOff
 
     var message: String {
         switch self {
@@ -53,6 +57,10 @@ enum AIFailure: Equatable {
             return "iOS blocked the request to Google (App Transport Security). Nothing was changed."
         case .badResponse:
             return "Google answered, but not in a form I could read. Nothing was changed."
+        case .refusedByModel(let reason):
+            return "Google's safety filter refused that request (\(reason)), so there is no answer. Nothing was changed."
+        case .cutOff:
+            return "The answer ran out of room before it finished, so I didn't use a half-finished one. Ask for less at a time and I'll try again."
         }
     }
 
@@ -64,7 +72,6 @@ enum AIFailure: Equatable {
     }
 }
 
-/// Boxed Int so the enum stays Equatable without a synthetic conformance fight.
 /// A status code, boxed so `AIFailure` stays Equatable without a synthetic-conformance fight.
 struct IntegerValue: Equatable, ExpressibleByIntegerLiteral, CustomStringConvertible, Hashable {
     var value: Int
@@ -118,17 +125,49 @@ enum OnlineAI {
         guard !key.isEmpty else { return .failure(.noKey) }
         if let problem = keyProblem(key) { return .failure(.keyLooksWrong(problem)) }
 
-        var contents: [[String: Any]] = history.map { turn in
-            ["role": turn.role, "parts": [["text": turn.text]]]
+        // Gemini rejects the whole request unless turns alternate user/model and start with "user".
+        // The app can legitimately end up with two model turns in a row (a declined confirmation, a
+        // card answered from the input bar), so the conversation is folded into a legal shape rather
+        // than sent as-is and answered with a 400 nobody can explain.
+        var contents: [[String: Any]] = []
+        var pendingUser: [String] = []
+        var pendingModel: [String] = []
+        func flush() {
+            if !pendingUser.isEmpty {
+                contents.append(["role": "user", "parts": [["text": pendingUser.joined(separator: "\n")]]])
+                pendingUser = []
+            }
+            if !pendingModel.isEmpty {
+                contents.append(["role": "model", "parts": [["text": pendingModel.joined(separator: "\n")]]])
+                pendingModel = []
+            }
         }
-        contents.append(["role": "user", "parts": [["text": question]]])
+        // A conversation must open with the user's turn, so leading model lines are skipped.
+        for turn in history.suffix(16).drop(while: { $0.role == "model" }) {
+            if turn.role == "model" { pendingModel.append(turn.text) } else { pendingUser.append(turn.text) }
+            if pendingUser.isEmpty != pendingModel.isEmpty { continue }
+            if !pendingUser.isEmpty, !pendingModel.isEmpty { flush() }
+        }
+        flush()
+        // Whatever the history ended as, the message being asked now is the user's turn.
+        if let last = contents.last as? [String: Any], (last["role"] as? String) == "user" {
+            // Fold the question into that turn instead of producing two user turns in a row.
+            if let parts = last["parts"] as? [[String: Any]], let text = parts.first?["text"] as? String {
+                contents[contents.count - 1] = ["role": "user", "parts": [["text": text + "\n" + question]]]
+            }
+        } else {
+            contents.append(["role": "user", "parts": [["text": question]]])
+        }
 
         let prompt = AIProtocol.systemPrompt(notes: relevantNotes,
                                              notePattern: notePattern.isEmpty ? nil : notePattern,
                                              includeCategoryTagging: true,
                                              includeReminderTagging: true,
                                              notesAreComplete: true,
-                                             contextBudget: contextBudget)
+                                             contextBudget: contextBudget,
+                                             relevantIDs: Set(QuestionAnswerer.topMatchingNotes(for: question,
+                                                                                                in: relevantNotes,
+                                                                                                limit: 8).map { $0.id }))
         let body: [String: Any] = [
             "contents": contents,
             "systemInstruction": ["parts": [["text": prompt]]],
@@ -180,7 +219,9 @@ enum OnlineAI {
 
     static func keyProblem(_ key: String) -> String? {
         if key.count < 20 { return "it is only \(key.count) characters long" }
-        if key.contains(" ") { return "there is a space in the middle of it" }
+        // Saving strips the ends; anything in the middle survives, and a pasted key with a line
+        // break in it is a real thing that happens when a browser wraps the text.
+        if key.contains(where: { $0 == " " || $0.isNewline }) { return "there is a space or line break inside it" }
         if key.lowercased().hasPrefix("your") { return "it looks like a placeholder rather than a key" }
         return nil
     }
@@ -208,13 +249,20 @@ enum OnlineAI {
                 }
 
                 if (200...299).contains(http.statusCode) {
-                    guard
-                        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                        let candidates = json["candidates"] as? [[String: Any]],
-                        let content = candidates.first?["content"] as? [String: Any],
-                        let parts = content["parts"] as? [[String: Any]]
-                    else {
+                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .failure(.badResponse)
+                    }
+                    // A refusal is not a malformed reply. Google says why (safety, or an empty
+                    // answer), and "I couldn't read that" sent people hunting for a formatting problem.
+                    if let reason = (json["promptFeedback"] as? [String: Any])?["blockReason"] as? String {
+                        return .failure(.refusedByModel(reason))
+                    }
+                    guard let candidates = json["candidates"] as? [[String: Any]],
+                          let content = candidates.first?["content"] as? [String: Any],
+                          let parts = content["parts"] as? [[String: Any]]
+                    else {
+                        let reason = (candidates?.first?["finishReason"] as? String) ?? ""
+                        return .failure(reason == "MAX_TOKENS" ? .cutOff : .badResponse)
                     }
                     let text = parts
                         .filter { ($0["thought"] as? Bool) != true }

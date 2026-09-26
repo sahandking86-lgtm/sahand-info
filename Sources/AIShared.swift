@@ -94,6 +94,10 @@ enum AIProtocol {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 
+        // Ordered most specific first. The day/month forms are here because the app's own example
+        // note is written "10/10/2025", and a model copying that shape used to have its reminder
+        // refused with "I couldn't read that date" - the note was created and the reminder silently
+        // wasn't. Day-first is tried before month-first, which is how the region writes it.
         let patterns = [
             "yyyy-MM-dd'T'HH:mm:ss",
             "yyyy-MM-dd'T'HH:mm",
@@ -104,6 +108,15 @@ enum AIProtocol {
             "yyyy/MM/dd",
             "dd-MM-yyyy HH:mm",
             "dd-MM-yyyy",
+            "d-M-yyyy H:mm",
+            "d-M-yyyy",
+            "d/M/yyyy H:mm",
+            "d/M/yyyy",
+            "M/d/yyyy H:mm",
+            "M/d/yyyy",
+            "d MMMM yyyy HH:mm",
+            "d MMMM yyyy",
+            "MMMM d, yyyy",
         ]
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
@@ -128,12 +141,28 @@ enum AIProtocol {
     /// - Parameter contextBudget: characters of note text the request may carry. Over the budget,
     ///   the oldest-and-least-relevant bodies are shortened and the model is *told* they were, so it
     ///   says "I only saw part of your notes" rather than confidently claiming something isn't there.
+    /// - Parameter relevantIDs: the notes the question's own words point at. Everything is listed,
+    ///   because "how many notes do I have" and "list my overdue ones" need the whole set, but the
+    ///   bodies of notes that look relevant are given in full and the rest are given a short excerpt.
+    ///   Previously every body was sent whole on every turn, which is what made a big collection slow
+    ///   and, past the ceiling, silently truncated.
     static func systemPrompt(notes: [Note],
                             notePattern: String? = nil,
                             includeCategoryTagging: Bool = false,
                             includeReminderTagging: Bool = false,
                             notesAreComplete: Bool = false,
-                            contextBudget: Int = 60_000) -> String {
+                            contextBudget: Int = 60_000,
+                            relevantIDs: Set<UUID> = []) -> String {
+        /// Chars of body each note may spend. Priority notes keep their text; the rest are indexed
+        /// so the model can still find them by title and category.
+        let priorityBodyLimit = 4_000
+        let otherBodyLimit = 240
+
+        func clipped(_ text: String, _ limit: Int) -> String {
+            guard text.count > limit else { return text }
+            return String(text.prefix(limit)) + "\n…(the rest of this note was left out to keep the request small)"
+        }
+
         let lines = notes.map { note -> String in
             let title = note.title.isEmpty ? "Untitled" : note.title
             var parts = ["Title: \(title)"]
@@ -146,11 +175,18 @@ enum AIProtocol {
                 parts.append("Reminder: \(reminderDateFormatter.string(from: reminder)) (\(note.isReminderCompleted ? "done" : "open"))")
             }
             parts.append("Created: \(dayFormatter.string(from: note.dateCreated)), edited: \(dayFormatter.string(from: note.dateModified))")
-            parts.append("Body: \(note.body.isEmpty ? "(empty)" : note.body)")
+            let limit = relevantIDs.isEmpty ? note.body.count
+                                           : (relevantIDs.contains(note.id) ? priorityBodyLimit : otherBodyLimit)
+            let body = clipped(note.body, limit)
+            parts.append("Body: \(body.isEmpty ? "(empty)" : body)")
             return parts.joined(separator: "\n")
         }
         var context = lines.joined(separator: "\n\n")
         var truncationNotice = ""
+        if !relevantIDs.isEmpty,
+           notes.contains(where: { !relevantIDs.contains($0.id) && $0.body.count > otherBodyLimit }) {
+            truncationNotice = "\n\nNote: every note is listed, but the ones that don't look relevant to this question are shown as an excerpt. If the answer might be in a part you were not given, say that instead of saying it is not there."
+        }
         if context.count > contextBudget {
             let perNote = max(400, contextBudget / max(lines.count, 1))
             context = notes.map { note -> String in

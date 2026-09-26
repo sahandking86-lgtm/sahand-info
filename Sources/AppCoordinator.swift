@@ -30,6 +30,13 @@ struct NoteRoute: Hashable {
     var startEditing: Bool = false
 }
 
+/// What a confirmation is for. Carried as data because re-reading the question text to work out
+/// what to do is how approving a card could end up doing nothing at all.
+enum ConfirmationWork: Equatable {
+    case deleteNotes([UUID])
+    case rewriteNote(id: UUID, title: String, body: String)
+}
+
 /// A change the assistant wants confirmed before it happens. Kept here rather than inside a chat
 /// bubble so that leaving the Ask tab, asking another question, or clearing the chat cannot
 /// silently abandon it - and so the other tabs can say "something is waiting for you".
@@ -42,6 +49,7 @@ struct PendingConfirmation: Identifiable, Equatable {
     var noteIDs: [UUID]
     var noteTitles: [String]
     var isDestructive: Bool = true
+    var work: ConfirmationWork
 }
 
 /// Transient, app-wide messaging: one-line notices ("I cleared your search so you could see it")
@@ -57,6 +65,10 @@ struct AppNotice: Identifiable, Equatable {
     /// "Review" on a pending change jumps to the tab where the buttons are, rather than being a
     /// label with no action behind it.
     var goToAsk = false
+    /// A notice can offer to put the answering mode back; without a real target these buttons were
+    /// decoration.
+    var switchMode: AnswerMode? = nil
+    var opensSettings = false
 }
 
 @MainActor
@@ -66,7 +78,6 @@ final class AppCoordinator: ObservableObject {
     /// Navigation stacks live here so opening a note from Ask, Date or the assistant ends up in the
     /// same place the user would have gone by hand - and so leaving a tab cannot strand a screen.
     @Published var notesPath: [NoteRoute] = []
-    @Published var datePath: [NoteRoute] = []
 
     @Published var searchText: String = ""
     @Published var categoryFilter: String? = nil
@@ -75,6 +86,13 @@ final class AppCoordinator: ObservableObject {
     /// Notes touched by the assistant, flashed briefly in the list so "done" is visible even if the
     /// user was looking at another tab when it happened.
     @Published private(set) var recentlyChanged: [UUID] = []
+
+    /// A note to bring into view. `nonce` makes every request distinct even for a repeat of the
+    /// same note, which is what lets SwiftUI's `onChange` see it.
+    struct ScrollRequest: Equatable {
+        let noteID: UUID
+        let nonce = UUID()
+    }
     @Published var pendingConfirmation: PendingConfirmation? = nil
     @Published var notice: AppNotice? = nil
     /// Set when Settings should be presented; the Notes tab owns the sheet, and every other route
@@ -82,7 +100,9 @@ final class AppCoordinator: ObservableObject {
     @Published var showingSettings = false
     /// Set by `reveal` so the list can scroll the note into view, not just open it. Without this,
     /// "show me what you changed" landed on a screen where the note was further down and unseen.
-    @Published var scrollRequest: UUID? = nil
+    /// The nonce matters: asking for the same note twice in a row is the same UUID, and `onChange`
+    /// does not fire for a value that has not changed - so the second request looked ignored.
+    @Published var scrollRequest: ScrollRequest? = nil
     /// Set when somewhere else wants the user in the Ask tab with a question already typed -
     /// "Ask the AI to remind you about this" used to be a sentence with no button behind it, and the
     /// app could not switch tabs at all.
@@ -130,30 +150,15 @@ final class AppCoordinator: ObservableObject {
                                highlightLine: highlightLine,
                                theme: theme,
                                startEditing: startEditing)]
-        scrollRequest = noteID
+        scrollRequest = ScrollRequest(noteID: noteID)
         if flash { markChanged([noteID]) }
         return true
     }
 
-    /// Pushes a note onto the tab the user is already on - used when the answer belongs to the Ask
-    /// conversation itself, where losing the chat behind a full-screen note is the wrong trade.
-    @discardableResult
-    func push(in tab: AppTab, _ route: NoteRoute, on store: NotesStore) -> Bool {
-        guard store.notes.contains(where: { $0.id == route.noteID }) else { return false }
-        switch tab {
-        case .notes: notesPath.append(route)
-        case .date: datePath.append(route)
-        case .ask: selectedTab = .ask
-        }
-        return true
-    }
-
-    func popCurrentTab() {
-        switch selectedTab {
-        case .notes: notesPath = []
-        case .date: datePath = []
-        case .ask: break
-        }
+    /// Closes the note that is open, if any. (A `push`/`datePath` pair used to sit here for a Date
+    /// tab that never bound a navigation stack, so anything using it moved nothing.)
+    func closeNote() {
+        notesPath = []
     }
 
     func setFilter(category: String?, search: String? = nil) {
@@ -180,13 +185,29 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    func say(_ text: String, actionLabel: String? = nil, noteID: UUID? = nil, undoes: Bool = false, goToAsk: Bool = false) {
-        notice = AppNotice(text: text, actionLabel: actionLabel, noteID: noteID, undoes: undoes, goToAsk: goToAsk)
+    func say(_ text: String,
+             actionLabel: String? = nil,
+             noteID: UUID? = nil,
+             undoes: Bool = false,
+             goToAsk: Bool = false,
+             switchMode: AnswerMode? = nil,
+             opensSettings: Bool = false) {
+        let notice = AppNotice(text: text, actionLabel: actionLabel, noteID: noteID, undoes: undoes,
+                               goToAsk: goToAsk, switchMode: switchMode, opensSettings: opensSettings)
+        self.notice = notice
         noticeTask?.cancel()
-        noticeTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run { self?.notice = nil }
+        // A notice with a button on it stays until it is used or dismissed. Auto-hiding after five
+        // seconds used to swallow the only "Undo" and the only "Review this change" that existed,
+        // because the timer did not care that a button was still attached.
+        guard notice.actionLabel != nil else {
+            noticeTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    if self?.notice?.id == notice.id { self?.notice = nil }
+                }
+            }
+            return
         }
     }
 

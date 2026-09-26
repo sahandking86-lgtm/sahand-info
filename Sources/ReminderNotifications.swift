@@ -89,6 +89,31 @@ final class ReminderScheduler: ObservableObject {
         requestAuthorization()
     }
 
+    /// Re-reads what iOS will actually do, because the authorization *request* only ever reports the
+    /// answer the user gave once. Turn notifications off in the Settings app afterwards and this app
+    /// would otherwise go on claiming "On — 3 reminders scheduled" while nothing arrived.
+    func refreshAuthorizationStatus() {
+        center.getNotificationSettings { settings in
+            let status = settings.authorizationStatus
+            let allowedByiOS = status == .authorized || status == .provisional
+            // "Authorized but no banner style" is what turning notifications off in Settings looks
+            // like from the inside, and it means nothing will be visible - so the truth is "blocked",
+            // not "on, 3 scheduled".
+            let silenced = allowedByiOS && settings.alertStyle == .none
+            Task { @MainActor in
+                self.authorizationGranted = allowedByiOS && !silenced
+                self.authorizationDenied = status == .denied || silenced
+                if self.authorizationGranted { self.rescheduleAll() }
+            }
+        }
+    }
+
+    /// Called when the app comes to the foreground: the badge is the count of undelivered reminders,
+    /// so reading the app clears it.
+    func clearBadge() {
+        UIApplication.shared.applicationIconBadgeNumber = 0
+    }
+
     func requestAuthorization() {
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             Task { @MainActor in
@@ -140,6 +165,10 @@ final class ReminderScheduler: ObservableObject {
         content.body = body.count > 140 ? String(body.prefix(137)) + "…" : body
         content.sound = .default
         content.userInfo = ["noteID": note.id.uuidString]
+        // The permission asks for a badge, so the badge is used: it counts what is still on the
+        // schedule and is cleared the moment the app is opened. Promising it and never setting it is
+        // how a notification app ends up with a red dot that no one can get rid of.
+        content.badge = 1
 
         let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
         let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
@@ -167,13 +196,15 @@ final class ReminderScheduler: ObservableObject {
     /// and "you have nothing scheduled" feel identical from the phone.
     var statusLine: String {
         if authorizationDenied {
-            return "Blocked in iOS Settings — turn notifications on for this app to be reminded."
+            return "Notifications are off for this app in iOS Settings — turn them on to be reminded."
         }
         if !notificationsWanted {
             return "Off. Your reminders still show on the Date tab, they just stay quiet."
         }
         if !authorizationGranted {
-            return "Waiting for permission. Tap Allow when iOS asks."
+            return authorizationDenied
+                ? "Blocked in iOS Settings — turn notifications on for this app to be reminded."
+                : "Waiting for permission. Tap Allow when iOS asks."
         }
         let upcoming = notesWithFutureReminders.count
         if upcoming == 0 { return "On — nothing upcoming to notify about." }

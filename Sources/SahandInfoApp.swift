@@ -263,6 +263,7 @@ private struct TypingIndicator: View {
 private struct AppNoticeBar: View {
     @EnvironmentObject private var coordinator: AppCoordinator
     @EnvironmentObject private var notesStore: NotesStore
+    @EnvironmentObject private var settings: SettingsStore
 
     var body: some View {
         if let notice = coordinator.notice {
@@ -277,9 +278,13 @@ private struct AppNoticeBar: View {
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.white)
                     .lineLimit(2)
+                    // Tapping the words dismisses. This used to be a gesture on the whole bar, which
+                    // sat on top of the buttons and could take a tap meant for "Undo".
+                    .contentShape(Rectangle())
+                    .onTapGesture { coordinator.dismissNotice() }
                 Spacer(minLength: 8)
                 if let label = notice.actionLabel {
-                    Button(label) { act(on: notice, label: label) }
+                    Button(notice.actionLabel ?? "OK") { act(on: notice) }
                         .font(.footnote.weight(.bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
@@ -301,11 +306,10 @@ private struct AppNoticeBar: View {
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .padding(.horizontal, 12)
             .transition(.move(edge: .bottom).combined(with: .opacity))
-            .onTapGesture { coordinator.dismissNotice() }
         }
     }
 
-    private func act(on notice: AppNotice, label: String) {
+    private func act(on notice: AppNotice) {
         if notice.undoes {
             if let undone = notesStore.undoLastChange() {
                 coordinator.say("Undid: \(undone)")
@@ -314,6 +318,16 @@ private struct AppNoticeBar: View {
         }
         if notice.goToAsk {
             coordinator.selectedTab = .ask
+            coordinator.dismissNotice()
+            return
+        }
+        if let mode = notice.switchMode {
+            settings.answerMode = mode
+            coordinator.dismissNotice()
+            return
+        }
+        if notice.opensSettings {
+            coordinator.showingSettings = true
             coordinator.dismissNotice()
             return
         }
@@ -346,6 +360,13 @@ private struct UndoBar: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Capsule().fill(Color.primary.opacity(0.08)))
+                Button("Later") {
+                    // Hides the offer without throwing the undo away: the store still has the
+                    // snapshot, so the Ask tab can undo it later.
+                    withAnimation(.snappy) { notesStore.hideUndoOffer() }
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 14)
@@ -473,12 +494,15 @@ final class NotesStore: ObservableObject {
         if !UserDefaults.standard.bool(forKey: seededKey) {
             UserDefaults.standard.set(true, forKey: seededKey)
             if notes.isEmpty {
+                // didSet does not run during init, so without this the Welcome note lived only in
+                // memory: relaunch before your first edit and it was gone.
                 notes = [
                     Note(
                         title: "Welcome",
                         body: "This is your first note. Tap the pencil icon to edit it, or tap + on the Notes tab to add a new one.\n\nTry writing something like:\n10/10/2025 Abc Restaurant entry = 20$\n\nThen go to the Ask tab and type: how much does abc restaurant entry cost?"
                     )
                 ]
+                save()
             }
         }
     }
@@ -488,7 +512,9 @@ final class NotesStore: ObservableObject {
     func note(id: UUID) -> Note? { notes.first(where: { $0.id == id }) }
     var canUndo: Bool { !undoStack.isEmpty }
 
-    func firstIndex(of id: UUID) -> Int? { notes.firstIndex(where: { $0.id == id }) }
+    /// The Undo bar is an offer, not a hostage: dismissing it must not destroy the snapshot, because
+    /// the assistant can still undo the same change from the chat.
+    func hideUndoOffer() { undoLabel = nil }
 
     /// Notes the Notes tab would actually show for the current search and category chip. The
     /// assistant needs this to say "3 notes match" truthfully instead of counting everything.
@@ -583,11 +609,6 @@ final class NotesStore: ObservableObject {
         return last.label
     }
 
-    func clearUndoStack() {
-        undoStack.removeAll()
-        undoLabel = nil
-    }
-
     private func mutate(_ label: String?, _ change: ([Note]) -> [Note]) {
         let next = change(notes)
         guard next != notes else { return }
@@ -608,10 +629,36 @@ final class NotesStore: ObservableObject {
         }
     }
 
+    /// Set once when the saved list could not be read whole, so Settings and the first notice can
+    /// say what happened instead of the app simply looking empty.
+    @Published private(set) var recoveryNotice: String? = nil
+
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([Note].self, from: data) else { return }
-        notes = decoded
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return }
+        if let decoded = try? JSONDecoder().decode([Note].self, from: data) {
+            notes = decoded
+            return
+        }
+        // One unreadable note used to cost the whole collection: the decode threw, `notes` stayed
+        // empty, and the next write persisted an empty list over the top of everything. So the bad
+        // copy is put aside first, then salvaged note by note.
+        UserDefaults.standard.set(data, forKey: storageKey + "_unreadable_copy")
+        var salvaged: [Note] = []
+        var dropped = 0
+        if let loose = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for entry in loose {
+                guard let entryData = try? JSONSerialization.data(withJSONObject: entry),
+                      let note = try? JSONDecoder().decode(Note.self, from: entryData) else {
+                    dropped += 1
+                    continue
+                }
+                salvaged.append(note)
+            }
+        }
+        notes = salvaged
+        recoveryNotice = dropped > 0
+            ? "Saved notes were damaged. \(salvaged.count) were recovered and \(dropped) could not be read; an untouched copy of the file is kept on the device."
+            : "Saved notes were damaged but have all been recovered; an untouched copy is kept on the device."
     }
 }
 
@@ -948,6 +995,25 @@ enum QuestionAnswerer {
 }
 
 extension QuestionAnswerer {
+    /// Verbs that only *look* like orders. "find", "show", "list" and friends are how people ask a
+    /// question of their own notes, so in the offline mode they must not be sent to the AI.
+    static let changeVerbs: Set<String> = [
+        "add", "create", "make", "write", "new", "delete", "remove", "trash", "erase", "clear",
+        "change", "edit", "update", "fix", "correct", "rename", "append", "set", "remind",
+        "categorize", "categorise", "tag", "untag", "undo", "move", "switch", "turn", "enable",
+        "disable", "duplicate", "merge", "mark", "put", "note", "remember", "log", "record",
+        "increase", "decrease", "replace",
+    ]
+
+    /// True when the message wants a note created, changed, deleted, or the app itself moved -
+    /// which is to say: when the offline matcher genuinely cannot serve it.
+    static func wantsAChange(_ text: String) -> Bool {
+        let words = tokenize(text)
+        guard !words.isEmpty else { return false }
+        if changeVerbs.contains(words[0]) { return true }
+        return words.filter { changeVerbs.contains($0) }.count >= 2
+    }
+
     /// True when the sentence is asking for something to happen rather than for an answer.
     ///
     /// Jump & Highlight deliberately works offline, but it used to apply that to every message - so
@@ -1087,9 +1153,16 @@ struct NotesListView: View {
         ScrollViewReader { proxy in
             List {
                 ForEach(visibleNotes) { note in
-                    NavigationLink(value: NoteRoute(noteID: note.id)) {
-                        NoteRowView(note: note) {
-                            toggleReminder(on: note)
+                    // The row is a tap gesture, not a NavigationLink, and that is the whole reason the
+                    // bell can be pressed: a Button nested inside a NavigationLink's label never gets
+                    // its tap, which is why ticking a reminder from the Notes tab did nothing at all.
+                    NoteRowView(note: note) {
+                        toggleReminder(on: note)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.snappy) {
+                            coordinator.notesPath.append(NoteRoute(noteID: note.id))
                         }
                     }
                     .listRowSeparator(.hidden)
@@ -1113,13 +1186,16 @@ struct NotesListView: View {
             .animation(.snappy, value: visibleIDs)
             .onChange(of: coordinator.scrollRequest) { _, target in
                 guard let target else { return }
+                let id = target.noteID
                 // Two passes: the row may not be laid out yet when the list has just had a filter
                 // cleared, and a single scrollTo then lands in the middle of the previous position.
-                withAnimation(.snappy) { proxy.scrollTo(target, anchor: .center) }
+                withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 240_000_000)
-                    proxy.scrollTo(target, anchor: .center)
-                    coordinator.scrollRequest = nil
+                    proxy.scrollTo(id, anchor: .center)
+                    // Only clear this request; a newer one must survive (the nonce is what makes a
+                    // repeat of the same note count as a new request at all).
+                    if coordinator.scrollRequest?.nonce == target.nonce { coordinator.scrollRequest = nil }
                 }
             }
         }
@@ -1307,7 +1383,7 @@ struct NoteDetailView: View {
                 .sensoryFeedback(.success, trigger: didSave)
                 .onAppear { startIfAskedTo() }
                 .onChange(of: coordinator.scrollRequest) { _, target in
-                    guard target == noteID else { return }
+                    guard target?.noteID == noteID else { return }
                     scrollToHighlight()
                 }
             } else {
@@ -1433,10 +1509,13 @@ struct NoteDetailView: View {
            let lineRange = body.range(of: line, options: [.caseInsensitive]) {
             let lineText = String(body[lineRange])
             if let inner = lineText.range(of: needle, options: [.caseInsensitive]) {
-                let offset = body.distance(from: body.startIndex, to: lineRange.lowerBound)
+                // Both ends are measured the same way. Using `needle.count` for the far end - which
+                // is what happened - assumes the match is exactly as long as the needle, and a
+                // case-insensitive match in Turkish or German can be a character or two longer,
+                // which then reaches past the line for the highlight.
                 let start = body.index(lineRange.lowerBound, offsetBy: lineText.distance(from: lineText.startIndex, to: inner.lowerBound))
-                _ = offset
-                return start..<body.index(start, offsetBy: needle.count)
+                let end = body.index(lineRange.lowerBound, offsetBy: lineText.distance(from: lineText.startIndex, to: inner.upperBound))
+                return start..<end
             }
             if let loose = looseRange(of: needle, in: lineText) {
                 let start = body.index(lineRange.lowerBound, offsetBy: lineText.distance(from: lineText.startIndex, to: loose.lowerBound))
@@ -1811,7 +1890,10 @@ struct ChatMessage: Identifiable, Equatable {
         /// with the literal word "Thinking…", so a reply that happened to start with that word looked
         /// like a request that would never finish.
         case waiting
-        case actionResult(text: String, opened: OpenedNote?, failed: Bool)
+        /// `undoLabel` is what the change was called at the time. The bubble only offers Undo while
+        /// that is still the most recent change, otherwise undoing an answer from twenty messages ago
+        /// would quietly roll back whatever was edited last.
+        case actionResult(text: String, opened: OpenedNote?, failed: Bool, undoLabel: String?)
         case confirmation(PendingConfirmation, answered: ConfirmationAnswer?)
         case sourcedAnswer(chips: [SourceNoteChip], segments: [ResolvedAnswerSegment])
     }
@@ -2018,7 +2100,7 @@ struct AskView: View {
         case .plainText(let text):
             ChatBubbleAssistantPlain(text: text)
 
-        case .actionResult(let text, let opened, let failed):
+        case .actionResult(let text, let opened, let failed, let undoLabel):
             VStack(alignment: .leading, spacing: 6) {
                 ChatBubbleAssistantPlain(text: text, tinted: failed)
                 HStack(spacing: 10) {
@@ -2034,7 +2116,7 @@ struct AskView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
-                    if notesStore.canUndo {
+                    if let undoLabel, notesStore.undoLabel == undoLabel {
                         Button {
                             if let label = notesStore.undoLastChange() {
                                 coordinator.say("Undid: \(label)")
@@ -2158,7 +2240,7 @@ struct AskView: View {
             case nil:
                 HStack(spacing: 10) {
                     Button(pending.isDestructive ? "Delete" : "Do it") {
-                        apply(confirmation: pending, messageID: messageID)
+                        confirm(pending, messageID: messageID)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(pending.isDestructive ? .red : settings.theme.endColor)
@@ -2179,27 +2261,39 @@ struct AskView: View {
         }
     }
 
-    private func apply(confirmation pending: PendingConfirmation, messageID: UUID) {
+    /// Approving a card - by button or by typing "yes" - goes through here, so a typed answer closes
+    /// the card too. Answering "yes" in words used to leave the "Do it" button live, and tapping it a
+    /// second later applied the same change twice: a double delete, or two identical notes.
+    private func confirm(_ pending: PendingConfirmation, messageID: UUID?) {
         let text = AIActions.confirm(pending, in: notesStore, coordinator: coordinator)
-        markAnswered(messageID: messageID, answer: .approved(text), fallback: text)
+        answer(pending: pending, messageID: messageID, with: .approved(text), spoken: text)
+        conversationHistory.append(ConversationTurn(role: "model", text: "[done] user confirmed this change: \(pending.question)"))
     }
 
-    private func decline(confirmation pending: PendingConfirmation, messageID: UUID) {
+    private func decline(confirmation pending: PendingConfirmation, messageID: UUID?) {
         coordinator.pendingConfirmation = nil
         let text = AIActions.decline(pending)
-        markAnswered(messageID: messageID, answer: .declined, fallback: text)
+        answer(pending: pending, messageID: messageID, with: .declined, spoken: text)
         conversationHistory.append(ConversationTurn(role: "model", text: "[declined] the user said no; nothing changed"))
     }
 
-    private func markAnswered(messageID: UUID, answer: ConfirmationAnswer, fallback: String) {
+    /// Writes the answer onto the card that asked. `messageID` is nil when the card was answered from
+    /// the input field, so the card is found by the confirmation's own id instead.
+    private func answer(pending: PendingConfirmation,
+                        messageID: UUID?,
+                        with answer: ConfirmationAnswer,
+                        spoken: String) {
+        let index = messageID.flatMap { id in messages.firstIndex(where: { $0.id == id }) }
+            ?? messages.lastIndex(where: {
+                if case .confirmation(let candidate, let answered) = $0.kind { return candidate.id == pending.id && answered == nil }
+                return false
+            })
         withAnimation(.snappy) {
-            if let index = messages.firstIndex(where: { $0.id == messageID }) {
-                if case .confirmation(let pending, _) = messages[index].kind {
-                    messages[index] = ChatMessage(id: messageID, kind: .confirmation(pending, answered: answer))
-                }
-            } else {
-                messages.append(ChatMessage(kind: .plainText(fallback)))
+            guard let index, case .confirmation(let candidate, _) = messages[index].kind else {
+                messages.append(ChatMessage(kind: .plainText(spoken)))
+                return
             }
+            messages[index] = ChatMessage(id: messages[index].id, kind: .confirmation(candidate, answered: answer))
         }
     }
 
@@ -2380,17 +2474,13 @@ struct AskView: View {
             if AppCoordinator.isAffirmative(trimmed) {
                 questionText = ""
                 withAnimation(.snappy) { messages.append(ChatMessage(kind: .userQuestion(trimmed))) }
-                let text = AIActions.confirm(pending, in: notesStore, coordinator: coordinator)
-                withAnimation(.snappy) { messages.append(ChatMessage(kind: .plainText(text))) }
-                conversationHistory.append(ConversationTurn(role: "model", text: "[done] user confirmed; \(pending.noteIDs.count) note(s) deleted"))
+                confirm(pending, messageID: nil)
                 return
             }
             if AppCoordinator.isNegative(trimmed) {
                 questionText = ""
-                coordinator.pendingConfirmation = nil
                 withAnimation(.snappy) { messages.append(ChatMessage(kind: .userQuestion(trimmed))) }
-                withAnimation(.snappy) { messages.append(ChatMessage(kind: .plainText(AIActions.decline(pending)))) }
-                conversationHistory.append(ConversationTurn(role: "model", text: "[declined] user said no; nothing changed"))
+                decline(confirmation: pending, messageID: nil)
                 return
             }
         }
@@ -2400,7 +2490,10 @@ struct AskView: View {
 
         switch settings.answerMode {
         case .jumpAndHighlight:
-            if QuestionAnswerer.looksLikeACommand(trimmed) {
+            // Only a request that *changes* something needs the assistant. Routing "find my wifi
+            // password" to the AI because it starts with "find" meant the offline mode asked for a
+            // key for a question it could answer itself.
+            if QuestionAnswerer.wantsAChange(trimmed) {
                 if settings.deepSeekAPIKey.isEmpty {
                     appendPlainText("That needs the assistant, and there's no API key yet. Add one in Settings → AI Assistant, or do it by hand in the Notes tab.")
                 } else {
@@ -2486,6 +2579,11 @@ struct AskView: View {
             }
 
             if let confirmation = result.confirmation {
+                // A card the user walked past is answered, not left waiting: two live cards for one
+                // question is how an old delete got applied after a newer request.
+                if let stale = coordinator.pendingConfirmation, stale.id != confirmation.id {
+                    supersede(pending: stale)
+                }
                 coordinator.pendingConfirmation = confirmation
                 replace(waitingID: waitingID, with: ChatMessage(id: waitingID, kind: .confirmation(confirmation, answered: nil)))
             } else if parsed.action == "none", !parsed.segments.isEmpty,
@@ -2496,7 +2594,8 @@ struct AskView: View {
                 replace(waitingID: waitingID, with: ChatMessage(id: waitingID,
                                                                 kind: .actionResult(text: result.reply,
                                                                                     opened: opened,
-                                                                                    failed: result.isFailure)))
+                                                                                    failed: result.isFailure,
+                                                                                    undoLabel: notesStore.undoLabel)))
             }
             if let pending = result.confirmation {
                 conversationHistory.append(ConversationTurn(role: "model", text: pending.question))
@@ -2615,6 +2714,7 @@ struct AnswerCardView: View {
         }
         .padding(16)
         .cardBackground()
+        .opacity(live == nil ? 0.55 : 1)
     }
 }
 
@@ -2696,21 +2796,31 @@ struct SettingsView: View {
                 get: { importPreview != nil },
                 set: { if !$0 { importPreview = nil } }
             ), titleVisibility: .visible) {
-                Button("Import \(importPreview?.newCount ?? 0) new note(s)") { applyImport(overwriteOlder: true) }
-                Button("Import only the new ones", role: .destructive) { applyImport(overwriteOlder: false) }
+                // The recommended choice first, and the one that overwrites your own newer work
+                // marked destructive. The labels used to promise the opposite of what each button did.
+                Button("Add \(importPreview?.newCount ?? 0) new, update \(importPreview?.newerCount ?? 0) newer from the file") {
+                    applyImport(preferFile: false)
+                }
+                Button("Overwrite mine with the file", role: .destructive) {
+                    applyImport(preferFile: true)
+                }
                 Button("Cancel", role: .cancel) { importPreview = nil }
             } message: {
                 if let preview = importPreview {
-                    Text("The file has \(preview.incoming.count) notes. \(preview.newerCount) are newer than yours and \(preview.olderCount) are older. Importing never deletes anything — but the first option does rewrite notes that match.")
+                    Text("The file has \(preview.incoming.count) notes: \(preview.newCount) you don't have, \(preview.newerCount) newer than yours, \(preview.olderCount) older. Neither option deletes anything. \u{201c}Overwrite mine\u{201d} replaces your copy with the file's even where yours is newer - that's the one to avoid unless you mean it.")
                 }
             }
             .confirmationDialog("Delete all \(notesStore.notes.count) notes?",
                                 isPresented: $showingClearAllConfirm,
                                 titleVisibility: .visible) {
                 Button("Export first, then delete", role: .destructive) {
-                    prepareExport()
-                    notesStore.deleteAll(label: "Deleted all \(notesStore.notes.count) notes")
-                    statusMessage = "Everything was exported to Backup, then deleted. Undo is in the bar above."
+                    // Delete only once the file is provably on disk. "Exported, then deleted" used to
+                    // be written before the write had even been attempted, so a failed export was a
+                    // silent way to lose everything while being told the opposite.
+                    guard prepareExport() else { return }
+                    let count = notesStore.notes.count
+                    notesStore.deleteAll(label: "Deleted all \(count) notes")
+                    statusMessage = "Saved \(count) note(s) to Backup, then deleted them. Undo is in the bar above."
                 }
                 Button("Delete without exporting", role: .destructive) {
                     notesStore.deleteAll(label: "Deleted all \(notesStore.notes.count) notes")
@@ -3100,13 +3210,15 @@ struct SettingsView: View {
 
     // MARK: - Backup
 
-    private func prepareExport() {
+    /// - Returns: true when the file is on disk, so anything that deletes afterwards can trust it.
+    @discardableResult
+    private func prepareExport() -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(notesStore.notes) else {
             statusMessage = "Couldn't prepare the export file."
-            return
+            return false
         }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd-HHmm"
@@ -3122,8 +3234,10 @@ struct SettingsView: View {
             try? BackupStore.pruneOldBackups(keeping: url, in: directory)
             exportURL = url
             statusMessage = "Saved \(notesStore.notes.count) note(s) to \(filename)."
+            return FileManager.default.fileExists(atPath: url.path)
         } catch {
             statusMessage = "Couldn't write the backup: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -3163,7 +3277,9 @@ struct SettingsView: View {
         }
     }
 
-    private func applyImport(overwriteOlder: Bool) {
+    /// `preferFile` false means "never lose a newer edit": a note that has been changed on this
+    /// phone since the backup stays as it is. true takes the file's copy either way.
+    private func applyImport(preferFile: Bool) {
         guard let preview = importPreview else { return }
         var merged = notesStore.notes
         var added = 0, replaced = 0, keptNewer = 0
@@ -3173,7 +3289,7 @@ struct SettingsView: View {
                 if incoming.dateModified > merged[index].dateModified {
                     merged[index] = incoming
                     replaced += 1
-                } else if overwriteOlder {
+                } else if preferFile {
                     merged[index] = incoming
                     replaced += 1
                 } else {
@@ -3203,20 +3319,25 @@ enum BackupStore {
         return directory
     }
 
-    /// Ten most recent files, so a week of daily exports can't fill the phone.
+    /// The ten most recent exports, so a week of daily backups can't fill the phone.
+    ///
+    /// Sorted by modification date on purpose: a directory hands back names in whatever order it
+    /// likes, and dropping the tail of that order can throw away the newest backup - the one the
+    /// user just made and was promised.
     static func pruneOldBackups(keeping current: URL, in directory: URL, limit: Int = 10) throws {
         let contents = (try? FileManager.default.contentsOfDirectory(at: directory,
-                                                                     includingPropertiesForKeys: nil)) ?? []
-        let backups = contents.filter { $0.lastPathComponent.hasPrefix("SahandInfoNotes-") && $0 != current }
-        for url in backups.drop(first: max(0, backups.count - limit)) {
+                                                                     includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let backups = contents
+            .filter { $0.lastPathComponent.hasPrefix("SahandInfoNotes-") && $0 != current }
+            .sorted { date($0) > date($1) }
+        for url in backups.dropFirst(max(0, limit)) {
             try? FileManager.default.removeItem(at: url)
         }
     }
-}
 
-extension Array {
-    /// Array has `dropFirst(_:)` returning a slice; this names the intent used above.
-    func drop(first amount: Int) -> ArraySlice<Element> { dropFirst(amount) }
+    private static func date(_ url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+    }
 }
 
 // MARK: - Date (Reminders)
@@ -3241,7 +3362,9 @@ struct DateView: View {
     /// Rows ticked in the last second stay on screen so the checkmark is actually seen. Removing the
     /// row inside the tap made "Done" look like the note had run away.
     @State private var recentlyTicked: Set<UUID> = []
-    @State private var tickClearTask: Task<Void, Never>?
+    /// One timer per note: a single shared task meant that ticking two reminders in a row left the
+    /// first one stuck in a "Not done" list forever, because the second tick cancelled its timer.
+    @State private var tickClearTasks: [UUID: Task<Void, Never>] = [:]
 
     private var filter: DateFilterMode {
         get { coordinator.dateFilter }
@@ -3305,7 +3428,7 @@ struct DateView: View {
         var list = withReminders
         switch filter {
         case .mostUrgent:
-            list = list.filter { !recentlyTicked.contains($0.id) ? !$0.isReminderCompleted : true }
+            list = list.filter { !$0.isReminderCompleted || recentlyTicked.contains($0.id) }
             return list.sorted { ($0.reminderDate ?? .distantFuture) < ($1.reminderDate ?? .distantFuture) }
         case .leastUrgent:
             list = list.filter { !$0.isReminderCompleted || recentlyTicked.contains($0.id) }
@@ -3506,7 +3629,7 @@ struct DateView: View {
 
                     if let date = note.reminderDate {
                         HStack(spacing: 6) {
-                            Label(reminderDateFormatter.string(from: date), systemImage: "calendar")
+                            Label(absoluteDateFormatter.string(from: date), systemImage: "calendar")
                             Text("·")
                             Text(urgency.label)
                                 .fontWeight(.semibold)
@@ -3542,20 +3665,18 @@ struct DateView: View {
         guard nowCompleted else { return }
         // Let the checkmark be seen before the row can leave a filter.
         recentlyTicked.insert(note.id)
-        tickClearTask?.cancel()
-        tickClearTask = Task { @MainActor in
+        tickClearTasks[note.id]?.cancel()
+        let id = note.id
+        tickClearTasks[id] = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_100_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.snappy) { _ = recentlyTicked.remove(note.id) }
+            withAnimation(.snappy) {
+                _ = recentlyTicked.remove(id)
+                tickClearTasks[id] = nil
+            }
         }
     }
 
-    private var reminderDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
 }
 
 // MARK: - Root
@@ -3621,9 +3742,18 @@ struct SahandInfoApp: App {
                     // so a reminder changed while offline still ends up correct.
                     reminders.configureOnce()
                     reminders.sync(with: notesStore.notes)
+                    // "The app looks empty" is not how a damaged save file should announce itself.
+                    if let recovery = notesStore.recoveryNotice {
+                        coordinator.say(recovery, actionLabel: "Open Settings", opensSettings: true)
+                    }
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { reminders.sync(with: notesStore.notes) }
+                    guard phase == .active else { return }
+                    reminders.sync(with: notesStore.notes)
+                    reminders.clearBadge()
+                    // Covers a tap on a notification that arrived while the app was closed too: the
+                    // schedule and the permission are both re-read rather than trusted from launch.
+                    reminders.refreshAuthorizationStatus()
                 }
         }
     }

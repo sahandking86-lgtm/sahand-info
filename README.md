@@ -144,9 +144,10 @@ scripts/
 - The only network call is the Gemini request, over HTTPS (no arbitrary loads allowed).
   Nothing is tracked or collected — see `Resources/PrivacyInfo.xcprivacy`.
 - Before using this for sensitive notes, know: the API key sits in plain `UserDefaults` (not
-  the Keychain), and *AI Answer* sends your notes to Google as prompt context — up to about 2,500
-  characters' worth of the most relevant notes, so a big collection isn't shipped wholesale with
-  every question. Use a dedicated key with its own quota, keep secrets out of the notes you ask
+  the Keychain), and *AI Answer* sends your notes to Google as prompt context. Every note is listed
+  (titles, categories, reminder dates and dates) so counts and lookups stay honest, but only the
+  notes your wording points at are sent with their full text — the rest arrive as a short excerpt,
+  and the model is told that happened. Use a dedicated key with its own quota, keep secrets out of the notes you ask
   about, or use **Jump & Highlight**, which answers from the device with no request at all.
 - A change the assistant wants to make is sent to Google as a *proposal*; nothing is written to
   your notes until you confirm, and the confirmation runs locally.
@@ -159,7 +160,8 @@ scripts/
 - **Notifications only arrive when the app is installed normally.** Installed as a *guest* inside
   LiveContainer, it shares another process, so iOS does not deliver its scheduled notifications —
   the reminder dates, list and undo all still work; only the alert is missing. Same for haptics.
-- Undo is one level deep per tab and is forgotten when the app relaunches; there is no trash.
+- The Undo bar only offers the *most recent* change, even though the store keeps up to 15 of them
+  for the assistant's own *Undo* action; nothing survives a relaunch, and there is no trash.
 - There is no multi-select in the Notes list: bulk deletes go through the assistant ("delete all
   my Work notes") or *Start Over* in Settings.
 - No unit tests yet; `AIProtocol.parse`, `AIActions` previews and `Note`'s back-compat decoder are
@@ -175,7 +177,7 @@ scripts/
 | *AI Answer* says to add a Gemini key | Settings → AI Assistant → paste a key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then press **Test key** — it says which part of the problem is yours (key rejected, API not enabled for the project, quota spent) instead of blaming the network. |
 | Settings says the key looks saved, but every request fails | The key almost certainly has a space or newline in it. Trailing whitespace is stripped on entry now; re-paste it once and the warning goes away. |
 | "Google didn't accept the request (400)" | The response body is quoted in that message — it usually names the exact problem (bad key, wrong model name, project not enabled). |
-| Answers look wrong after editing notes | Only the most relevant notes are sent (they're ranked by your wording). If a note is skipped, include a distinctive phrase from it in the question, or open the note and ask from there. |
+| Answers look wrong after editing notes | Every note is listed but only the ones your wording matches are sent in full. If the answer is in a note the question didn't point at, quote a distinctive phrase from it, or open the note and ask from there. |
 | A reminder date passes with no notification | Either notifications are off (Settings → *Notifications allowed?* shows *No — open iOS Settings*), or the app is running as a LiveContainer guest, where iOS doesn't deliver a guest's notifications. |
 | The assistant changed or deleted something by mistake | Tap **Undo** in the bar at the bottom — it restores the whole collection as it was, from whichever tab you are in. |
 | A note highlighted yellow on open, then the highlight vanished | That's deliberate: it fades out after a couple of seconds rather than staying marked forever. Re-ask or tap the source chip to mark it again. |

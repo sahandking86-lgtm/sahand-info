@@ -68,6 +68,7 @@ enum AIActions {
                 }
             }
             store.add(note, label: "Added “\(note.title.isEmpty ? "Untitled" : note.title)”")
+            coordinator.markChanged([note.id])
             result.changed = [note.id]
             result.openableID = note.id
             result.openableTitle = note.title.isEmpty ? "Untitled" : note.title
@@ -87,13 +88,14 @@ enum AIActions {
             let newBody = parsed.content ?? match.body
             // A rewrite is the one operation that can lose text. If the proposed body is much
             // shorter than the original, do not apply it silently - show what it would become.
-            if newBody != match.body, newBody.count * 2 < match.body.count, !match.body.isEmpty {
+            if newBody != match.body, losesTooMuch(newBody, comparedTo: match.body), !match.body.isEmpty {
                 result.confirmation = PendingConfirmation(
                     question: "Rewrite “\(title(of: match))” completely?",
-                    detail: "The new text is \(newBody.count) characters and the note is \(match.body.count). I only do this on your say-so, because the rest of the note would be gone.",
+                    detail: "The new text is \(newBody.count) characters and the note is \(match.body.count), so anything left out really is gone. Approve it and the note becomes exactly this:",
                     noteIDs: [match.id],
                     noteTitles: [title(of: match)],
-                    isDestructive: true
+                    isDestructive: true,
+                    work: .rewriteNote(id: match.id, title: parsed.title ?? match.title, body: newBody)
                 )
                 result.reply = "That would replace the whole note. Check the card below first — or ask me to change just the part you mean."
                 result.outcomeForHistory = "[waiting] asked the user to confirm a full rewrite of \"\(title(of: match))\""
@@ -118,7 +120,14 @@ enum AIActions {
                   let match = QuestionAnswerer.bestMatchingNote(for: target, in: notes) else {
                 return notFound(parsed, action: "change that note", store: store)
             }
-            let replacement = parsed.replace ?? ""
+            // An omitted "replace" used to mean "replace with nothing", so a model that filled in
+            // only half the request deleted the passage it was asked to reword.
+            guard let replacement = parsed.replace else {
+                result.reply = "Tell me what to put in place of “\(find)” and I'll change it — I didn't want to guess that you meant to delete those words."
+                result.isFailure = true
+                result.outcomeForHistory = "[failed] patch_note had no \"replace\" value; nothing changed"
+                return result
+            }
             guard let range = match.body.range(of: find, options: [.caseInsensitive]) else {
                 result.reply = "I looked in “\(title(of: match))” for “\(find)” and it isn't there, so I changed nothing. Tell me the words as they appear in the note and I'll fix it."
                 result.isFailure = true
@@ -268,7 +277,10 @@ enum AIActions {
                 result.reply = "Showing all notes."
                 return result
             }
-            guard store.allCategories.contains(wanted) else {
+            // "show work notes" used to be refused because the category is spelled "Work", and where
+            // it did match, the filter was set to the lower-cased spelling - which matches no note, so
+            // the tab went empty under a reply that had just counted three.
+            guard let canonical = canonicalCategory(wanted, in: store) else {
                 let known = store.allCategories
                 result.reply = known.isEmpty
                     ? "You have no categories yet — once notes are tagged, “\(wanted)” becomes available."
@@ -276,8 +288,8 @@ enum AIActions {
                 result.isFailure = true
                 return result
             }
-            coordinator.setFilter(category: wanted)
-            let count = store.notes.filter { $0.categoryEnglish == wanted }.count
+            coordinator.setFilter(category: canonical)
+            let count = store.notes.filter { $0.categoryEnglish == canonical }.count
             result.reply = "Showing \(count) note\(count == 1 ? "" : "s") in \(wanted)."
             result.outcomeForHistory = "[done] filtered the notes tab to category \"\(wanted)\""
             return result
@@ -304,8 +316,16 @@ enum AIActions {
                 ? "Nothing matches that — you have \(notes.count) note\(notes.count == 1 ? "" : "s") in total."
                 : "\(list.count) note\(list.count == 1 ? "" : "s"): \(titles.joined(separator: ", "))\(tail)."
             if !list.isEmpty {
+                // The search box belongs here too: filtering to a category while a stale search is
+                // still running showed "0 notes" under a reply that had just counted three.
+                coordinator.searchText = ""
                 coordinator.selectedTab = .notes
-                coordinator.categoryFilter = scope.hasPrefix("category:") ? String(scope.dropFirst(9)).trimmingCharacters(in: .whitespaces) : nil
+                if scope.hasPrefix("category:") {
+                    let name = String(scope.dropFirst("category:".count)).trimmingCharacters(in: .whitespaces)
+                    coordinator.categoryFilter = canonicalCategory(name, in: store)
+                } else {
+                    coordinator.categoryFilter = nil
+                }
             }
             result.outcomeForHistory = "[done] listed \(list.count) notes"
             return result
@@ -375,7 +395,9 @@ enum AIActions {
             if mode == .jumpAndHighlight && settings.answerMode != mode {
                 // Saying the truth about what that mode costs, since it is the mode where the
                 // assistant stops acting on requests.
-                coordinator.say("Jump & Highlight answers without the assistant, so changes need AI Answer.", actionLabel: "Switch back")
+                coordinator.say("Jump & Highlight answers without the assistant, so changes need AI Answer.",
+                                actionLabel: "Switch back",
+                                switchMode: .aiAnswer)
             }
             settings.answerMode = mode
             result.reply = mode == .aiAnswer
@@ -471,41 +493,55 @@ enum AIActions {
 
         // One note by name, or a whole category: still a tap (or a typed "yes") first. Deleting on
         // the strength of a guess was the one place the assistant could do real damage.
+        let names = victims.prefix(8).map { title(of: $0) }
+        let extra = victims.count > names.count ? ", and \(victims.count - names.count) more" : ""
         result.confirmation = PendingConfirmation(
             question: victims.count == 1
                 ? "Delete “\(title(of: victims[0]))”?"
                 : "Delete \(victims.count) notes?",
             detail: victims.count == 1
-                ? "It goes away from the Notes tab and the Date tab. You can undo from the banner straight after."
-                : "\(victims.count) notes will go. Undo brings them all back.",
+                ? "It goes away from the Notes tab and the Date tab. Undo brings it back from the banner straight after."
+                : "“\(names.joined(separator: ”, ”))”\(extra) will go. Undo brings them all back.",
             noteIDs: victims.map { $0.id },
-            noteTitles: victims.prefix(8).map { title(of: $0) },
-            isDestructive: true
+            noteTitles: names,
+            isDestructive: true,
+            work: .deleteNotes(victims.map { $0.id })
         )
         result.outcomeForHistory = "[waiting] asked to delete \(victims.count) note(s): \(victims.prefix(6).map { title(of: $0) }.joined(separator: ", "))"
         return result
     }
 
     /// Applies a confirmation the user approved (button or "yes"). Returns the line for the chat.
+    ///
+    /// This used to read the question text to work out what to do. That is why the one non-delete
+    /// confirmation the app offers - "rewrite this note" - did nothing when approved: nothing matched
+    /// the sniffing, and the card answered with a shrug instead of the change it had asked for.
     static func confirm(_ confirmation: PendingConfirmation, in store: NotesStore, coordinator: AppCoordinator) -> String {
-        let existing = Set(store.notes.map { $0.id })
-        let targets = confirmation.noteIDs.filter { existing.contains($0) }
-        guard !targets.isEmpty else {
-            coordinator.pendingConfirmation = nil
-            return "Those notes are already gone."
+        defer { coordinator.pendingConfirmation = nil }
+        switch confirmation.work {
+        case .deleteNotes(let ids):
+            let existing = Set(store.notes.map { $0.id })
+            let targets = ids.filter { existing.contains($0) }
+            guard !targets.isEmpty else { return "Those notes are already gone." }
+            let names = targets.compactMap { store.note(id: $0) }.map { title(of: $0) }
+            let label = names.count == 1 ? "Deleted “\(names[0])”" : "Deleted \(names.count) notes"
+            store.delete(ids: targets, label: label)
+            coordinator.say("Deleted \(targets.count) note\(targets.count == 1 ? "" : "s").", actionLabel: "Undo", undoes: true)
+            return "Deleted \(targets.count) note\(targets.count == 1 ? "" : "s"). Undo brings \(targets.count == 1 ? "it" : "them") back."
+
+        case .rewriteNote(let id, let newTitle, let newBody):
+            guard var note = store.note(id: id) else {
+                return "That note isn't there any more, so nothing was rewritten."
+            }
+            let previousCount = note.body.count
+            if !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { note.title = newTitle }
+            note.body = newBody
+            note.dateModified = Date()
+            store.update(note, label: "Rewrote “\(title(of: note))”")
+            coordinator.markChanged([id])
+            coordinator.say("Rewrote “\(title(of: note))”.", actionLabel: "Undo", undoes: true)
+            return "Rewrote “\(title(of: note))” — \(previousCount) characters became \(newBody.count). Undo puts the old text back."
         }
-        if confirmation.question.hasPrefix("Rewrite") {
-            // The full-rewrite guard: nothing to delete, the body was already prepared by the model,
-            // so here we simply say it needs re-asking through a normal update.
-            coordinator.pendingConfirmation = nil
-            return "Ask me again and I'll rewrite it — say what the whole note should contain."
-        }
-        store.delete(ids: targets, label: targets.count == 1
-                     ? "Deleted a note"
-                     : "Deleted \(targets.count) notes")
-        coordinator.pendingConfirmation = nil
-        coordinator.say("Deleted \(targets.count) note\(targets.count == 1 ? "" : "s").", actionLabel: "Undo", undoes: true)
-        return "Deleted \(targets.count) note\(targets.count == 1 ? "" : "s"). The banner above can undo it."
     }
 
     static func decline(_ confirmation: PendingConfirmation) -> String {
@@ -527,6 +563,34 @@ enum AIActions {
         var result = Result(reply: parsed.reply.isEmpty ? reason : "\(parsed.reply) — \(reason)")
         result.isFailure = true
         return result
+    }
+
+    /// "Rewrite" is only worth a confirmation when a real amount of text disappears. Half was the
+    /// old cut-off, which let a rewrite that dropped 40% of a note through silently.
+    private static func losesTooMuch(_ proposed: String, comparedTo original: String) -> Bool {
+        guard !original.isEmpty else { return false }
+        return proposed.count * 4 < original.count * 3
+    }
+
+    /// The category as it is actually spelled on the notes, or nil if there is no such category.
+    private static func canonicalCategory(_ wanted: String, in store: NotesStore) -> String? {
+        if let exact = store.allCategories.first(where: { $0 == wanted }) { return exact }
+        return store.allCategories.first(where: { $0.caseInsensitiveCompare(wanted) == .orderedSame })
+    }
+
+    /// A rewrite is only worth a confirmation when a real amount of text disappears. Half was the old
+    /// cut-off, which let a rewrite that dropped 40% of a note through silently.
+    private static func losesTooMuch(_ proposed: String, comparedTo original: String) -> Bool {
+        guard !original.isEmpty else { return false }
+        return proposed.count * 4 < original.count * 3
+    }
+
+    /// The category as it is actually spelled on the notes, or nil when there is no such category.
+    private static func canonicalCategory(_ wanted: String, in store: NotesStore) -> String? {
+        let trimmed = wanted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let exact = store.allCategories.first(where: { $0 == trimmed }) { return exact }
+        return store.allCategories.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame })
     }
 
     private static func title(of note: Note) -> String {
