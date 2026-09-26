@@ -150,7 +150,7 @@ enum OnlineAI {
         }
         flush()
         // Whatever the history ended as, the message being asked now is the user's turn.
-        if let last = contents.last as? [String: Any], (last["role"] as? String) == "user" {
+        if let last = contents.last, (last["role"] as? String) == "user" {
             // Fold the question into that turn instead of producing two user turns in a row.
             if let parts = last["parts"] as? [[String: Any]], let text = parts.first?["text"] as? String {
                 contents[contents.count - 1] = ["role": "user", "parts": [["text": text + "\n" + question]]]

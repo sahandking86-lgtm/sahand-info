@@ -155,12 +155,6 @@ final class AppCoordinator: ObservableObject {
         return true
     }
 
-    /// Closes the note that is open, if any. (A `push`/`datePath` pair used to sit here for a Date
-    /// tab that never bound a navigation stack, so anything using it moved nothing.)
-    func closeNote() {
-        notesPath = []
-    }
-
     func setFilter(category: String?, search: String? = nil) {
         categoryFilter = category
         if let search { searchText = search }

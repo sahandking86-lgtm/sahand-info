@@ -284,7 +284,7 @@ private struct AppNoticeBar: View {
                     .onTapGesture { coordinator.dismissNotice() }
                 Spacer(minLength: 8)
                 if let label = notice.actionLabel {
-                    Button(notice.actionLabel ?? "OK") { act(on: notice) }
+                    Button(label) { act(on: notice) }
                         .font(.footnote.weight(.bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
@@ -1012,33 +1012,6 @@ extension QuestionAnswerer {
         guard !words.isEmpty else { return false }
         if changeVerbs.contains(words[0]) { return true }
         return words.filter { changeVerbs.contains($0) }.count >= 2
-    }
-
-    /// True when the sentence is asking for something to happen rather than for an answer.
-    ///
-    /// Jump & Highlight deliberately works offline, but it used to apply that to every message - so
-    /// "make a note that I paid 20 dollars" got the reply "I couldn't find an answer to that in your
-    /// notes". Requests that change something are the assistant's job in either mode; this is the
-    /// test that tells them apart.
-    static func looksLikeACommand(_ text: String) -> Bool {
-        let words = tokenize(text)
-        guard !words.isEmpty else { return false }
-        let verbs: Set<String> = [
-            "add", "create", "make", "write", "new", "delete", "remove", "trash", "erase", "clear",
-            "change", "edit", "update", "fix", "correct", "rename", "append", "set", "remind",
-            "categorize", "categorise", "tag", "untag", "open", "show", "find", "search", "list",
-            "count", "undo", "move", "switch", "go", "turn", "enable", "disable", "hide", "sort",
-            "filter", "duplicate", "merge", "keep", "mark", "cancel", "stop", "yes", "confirm",
-            "please", "put", "note", "remember", "log", "record", "increase", "decrease", "replace",
-        ]
-        let englishCommands: Set<String> = ["do", "it", "them", "all", "everything", "for", "me", "my"]
-        let hits = words.filter { verbs.contains($0) }.count
-        if hits == 0 { return false }
-        // A leading verb is the strong signal; a verb buried in a question is weaker, so require a
-        // couple of them before treating a question as a command.
-        if verbs.contains(words[0]) { return true }
-        let imperativeish = hits + words.filter { englishCommands.contains($0) }.count
-        return hits >= 2 || imperativeish >= 4
     }
 }
 
@@ -2281,7 +2254,7 @@ struct AskView: View {
     /// the input field, so the card is found by the confirmation's own id instead.
     private func answer(pending: PendingConfirmation,
                         messageID: UUID?,
-                        with answer: ConfirmationAnswer,
+                        with answerValue: ConfirmationAnswer,
                         spoken: String) {
         let index = messageID.flatMap { id in messages.firstIndex(where: { $0.id == id }) }
             ?? messages.lastIndex(where: {
@@ -2293,7 +2266,7 @@ struct AskView: View {
                 messages.append(ChatMessage(kind: .plainText(spoken)))
                 return
             }
-            messages[index] = ChatMessage(id: messages[index].id, kind: .confirmation(candidate, answered: answer))
+            messages[index] = ChatMessage(id: messages[index].id, kind: .confirmation(candidate, answered: answerValue))
         }
     }
 
