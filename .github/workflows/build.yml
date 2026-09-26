@@ -1,17 +1,7 @@
 name: Build IPA
 on:
   workflow_dispatch:
-    inputs:
-      offline_model:
-        description: "Bundle the ~2 GB offline AI model (Resources/model.gguf)"
-        type: boolean
-        default: true
-      model_url:
-        description: "Optional GGUF URL override; empty = default Qwen2.5-3B q4_k_m (~2 GB)"
-        type: string
-        default: ""
 
-# Two runs of this workflow are pointless and the model download is heavy.
 concurrency:
   group: build-ipa
   cancel-in-progress: false
@@ -19,24 +9,11 @@ concurrency:
 jobs:
   build:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     env:
       HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download local AI model
-        if: ${{ inputs.offline_model }}
-        env:
-          # An empty input falls through to the script's own default URL.
-          MODEL_URL: ${{ inputs.model_url }}
-        run: bash scripts/fetch-model.sh
-
-      # Skipped on purpose: the app builds and runs without it, and Sources/LocalAI.swift
-      # reports "Model file missing from app bundle." only if Offline AI is actually used.
-      - name: Note missing offline model
-        if: ${{ !inputs.offline_model }}
-        run: echo "Building without Resources/model.gguf — Online AI (Gemini) only." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -54,9 +31,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
 
-      # Cheap regression net: the two resources that are easiest to lose silently are the
-      # offline model (gitignored) and the app icon (needs the Info.plist keys actool injects).
-      # Hard-fails if the executable is missing; reports the rest into the run summary.
+      # Cheap regression net: the app icon is the easiest thing to lose silently (it needs the
+      # Info.plist keys actool injects). Hard-fails if the executable is missing; reports the
+      # rest into the run summary so a "why is there no icon" question has an instant answer.
       - name: Verify app bundle
         run: |
           app="build/Build/Products/Release-iphoneos/Sahand Info.app"
@@ -67,7 +44,6 @@ jobs:
             echo "- executable: \`$exec_name\`"
             echo "- UILaunchScreen: $(plutil -extract UILaunchScreen json "$app/Info.plist" >/dev/null 2>&1 && echo present || echo MISSING)"
             echo "- app icon wired up: $(plutil -extract CFBundleIcons json "$app/Info.plist" >/dev/null 2>&1 && echo yes || echo 'no (actool did not inject it)')"
-            echo "- model.gguf: $( [ -f "$app/model.gguf" ] && du -h "$app/model.gguf" | cut -f1 || echo 'absent — online-only build' )"
           } >> "$GITHUB_STEP_SUMMARY"
           tail -n 6 "$GITHUB_STEP_SUMMARY"
 

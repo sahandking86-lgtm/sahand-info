@@ -3,18 +3,12 @@
 #   brew install xcodegen && xcodegen generate
 #
 # Edit this file (and Sources/Info.plist) instead of the generated project.
+# No external packages: the app is SwiftUI + URLSession against the Gemini REST API.
 name: SahandInfo
 options:
   bundleIdPrefix: com.sahandinfo
   # Mirrors the folder layout in Xcode's navigator instead of one flat list.
   createIntermediateGroups: true
-packages:
-  # Offline AI (llama.cpp wrapper). swift-llama-cpp 1.1+ declares swift-tools-version
-  # 6.1, so Xcode 16.3 or newer is required to resolve and build it. The package also
-  # downloads a ~200 MB llama.cpp XCFramework on first build.
-  SwiftLlama:
-    url: https://github.com/pgorzelany/swift-llama-cpp
-    from: "1.0.0"
 configs:
   Debug: debug
   Release: release
@@ -26,12 +20,9 @@ targets:
     sources:
       - path: Sources
       # Both folders must exist — XcodeGen errors on a missing source path.
-      # Resources/model.gguf (the offline model) is gitignored; see Resources/README.md.
       - path: Resources
         excludes:
           - "README.md"
-    dependencies:
-      - package: SwiftLlama
     # NOTE: deliberately no `info:` block. XcodeGen *rewrites* the file named by
     # `info.path`, which would wipe the hand-maintained keys out of Sources/Info.plist.
     # Setting INFOPLIST_FILE below points Xcode at the same file without touching it

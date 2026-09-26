@@ -1,7 +1,6 @@
 # Fast check on every push / pull request: the repo has to be able to produce a
-# working Xcode project and compile. This is the same pipeline as build.yml minus the
-# ~2 GB model download and the packaging/upload steps. Docs-only changes skip it, since
-# macOS runner minutes are expensive.
+# working Xcode project and compile. Same steps as build.yml minus packaging and the
+# artifact upload. Docs-only changes skip it, since macOS runner minutes are expensive.
 name: CI
 on:
   push:
@@ -60,7 +59,7 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
-      - name: Build (online AI only, no bundled model)
+      - name: Build app
         run: |
           xcodebuild -project SahandInfo.xcodeproj \
             -scheme SahandInfo \

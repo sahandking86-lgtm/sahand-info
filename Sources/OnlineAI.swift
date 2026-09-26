@@ -2,7 +2,7 @@ import Foundation
 
 enum OnlineAI {
     private static let modelURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent")
-    private static let unavailableMessage = "Gemini isn't available right now. Go to Settings and switch to Offline AI to keep going."
+    private static let unavailableMessage = "Gemini isn't available right now — check your connection and try again in a moment."
 
     static func answer(
         question: String,
@@ -12,7 +12,7 @@ enum OnlineAI {
         notePattern: String = ""
     ) async -> String {
         guard !apiKey.isEmpty else {
-            return "Add a Gemini API key in Settings first, or switch to Offline AI."
+            return "Add your Gemini API key in Settings first, then ask again."
         }
 
         var contents: [[String: Any]] = history.map { turn in
@@ -77,8 +77,8 @@ enum OnlineAI {
     }
 
     /// Shared request + retry logic used by both answer() and suggestCategory(). Every failure
-    /// path returns the same clear, unified message — no auto-switching, just a clean signal
-    /// that the user needs to go flip the engine over in Settings themselves.
+    /// path returns the same clear, unified message, so the UI never has to guess why nothing
+    /// came back.
     private static func sendRequest(body: [String: Any], apiKey: String) async -> String {
         guard let url = modelURL else {
             return unavailableMessage

@@ -346,12 +346,6 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    @Published var useOnlineAI: Bool {
-        didSet {
-            UserDefaults.standard.set(useOnlineAI, forKey: onlineStorageKey)
-        }
-    }
-
     @Published var deepSeekAPIKey: String {
         didSet {
             UserDefaults.standard.set(deepSeekAPIKey, forKey: apiKeyStorageKey)
@@ -371,7 +365,6 @@ final class SettingsStore: ObservableObject {
     }
 
     private let storageKey = "sahand_info_answer_mode_v1"
-    private let onlineStorageKey = "sahand_info_use_online_ai_v1"
     private let apiKeyStorageKey = "sahand_info_deepseek_api_key_v1"
     private let notePatternStorageKey = "sahand_info_note_pattern_v1"
     private let themeStorageKey = "sahand_info_theme_v1"
@@ -383,7 +376,6 @@ final class SettingsStore: ObservableObject {
         } else {
             answerMode = .aiAnswer
         }
-        useOnlineAI = UserDefaults.standard.bool(forKey: onlineStorageKey)
         deepSeekAPIKey = UserDefaults.standard.string(forKey: apiKeyStorageKey) ?? ""
         notePattern = UserDefaults.standard.string(forKey: notePatternStorageKey) ?? ""
         if let rawTheme = UserDefaults.standard.string(forKey: themeStorageKey),
@@ -1003,11 +995,11 @@ struct NoteDetailView: View {
         notesStore.update(updated)
     }
 
-    /// While the user writes a note themselves, wait for a pause in typing, then have the
-    /// online AI suggest a bilingual category — but only if one isn't already set, and only
-    /// when online AI is actually configured. Never touches the offline model.
+    /// While the user writes a note themselves, wait for a pause in typing, then have the AI
+    /// suggest a bilingual category — but only if one isn't already set, and only when a
+    /// Gemini key is actually configured.
     private func scheduleAutoCategorize() {
-        guard settings.useOnlineAI, !settings.deepSeekAPIKey.isEmpty else { return }
+        guard !settings.deepSeekAPIKey.isEmpty else { return }
         autoCategorizeTask?.cancel()
 
         let titleSnapshot = draftTitle
@@ -1526,14 +1518,11 @@ struct AskView: View {
             withAnimation(.snappy) {
                 messages.append(ChatMessage(id: thinkingID, kind: .plainText("Thinking…")))
             }
-            let searchSeed = (conversationHistory.suffix(2).map { $0.text } + [trimmed]).joined(separator: " ")
-            let topMatchedNotes = QuestionAnswerer.topMatchingNotes(for: searchSeed, in: notesStore.notes)
+            // Snapshotted before the Task so the prompt is built from one consistent set of notes.
             let allNotes = notesStore.notes
             let historySnapshot = conversationHistory
             Task {
-                let rawText = settings.useOnlineAI
-                    ? await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
-                    : await LocalAI.shared.answer(question: trimmed, relevantNotes: topMatchedNotes)
+                let rawText = await OnlineAI.answer(question: trimmed, relevantNotes: allNotes, apiKey: settings.deepSeekAPIKey, history: historySnapshot, notePattern: settings.notePattern)
 
                 let parsed = AIProtocol.parse(rawText)
                 var replyText = parsed.reply
@@ -1796,27 +1785,25 @@ struct SettingsView: View {
                         }
                     }
 
-                    // AI engine
+                    // AI assistant
                     VStack(alignment: .leading, spacing: 12) {
-                        sectionHeader("AI Engine", systemImage: "cpu")
+                        sectionHeader("AI Assistant", systemImage: "key.fill")
 
                         VStack(alignment: .leading, spacing: 12) {
-                            Picker("AI Engine", selection: $settings.useOnlineAI) {
-                                Text("Offline AI").tag(false)
-                                Text("Online AI (Gemini)").tag(true)
-                            }
-                            .pickerStyle(.segmented)
+                            SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
 
-                            if settings.useOnlineAI {
-                                SecureField("Gemini API key", text: $settings.deepSeekAPIKey)
-                                    .textFieldStyle(.roundedBorder)
-                                    .autocorrectionDisabled()
-                                    .textInputAutocapitalization(.never)
-
-                                Text("Uses your own free Gemini API key over WiFi instead of the bundled offline model. Free tier has rate limits, and Google may use free-tier requests to improve their models.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            if settings.deepSeekAPIKey.isEmpty {
+                                Label("No key set yet — Ask can't answer until you add one.", systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
                             }
+
+                            Text("Answers run through your own free Gemini key (aistudio.google.com/apikey) over WiFi. Free tier has rate limits, and Google may use free-tier requests to improve their models.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         .padding(16)
                         .cardBackground()
@@ -1833,7 +1820,7 @@ struct SettingsView: View {
                                 .background(Color(.secondarySystemBackground))
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                            Text("Give an example of how you like notes written, e.g. \"10/10/2025 Abc Restaurant entry = 20$\" — new notes the AI creates will follow that style. Currently used by Online AI only.")
+                            Text("Give an example of how you like notes written, e.g. \"10/10/2025 Abc Restaurant entry = 20$\" — new notes the AI creates will follow that style.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

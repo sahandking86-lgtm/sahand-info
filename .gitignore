@@ -24,15 +24,6 @@ SourcePackages/
 buildServer.json
 
 # ---------------------------------------------------------------------------
-# The offline GGUF model (~2.3 GB) — downloaded by scripts/fetch-model.sh,
-# never committed. See Resources/README.md.
-# ---------------------------------------------------------------------------
-Resources/*.gguf
-Resources/*.gguf.part
-*.gguf
-Models/
-
-# ---------------------------------------------------------------------------
 # macOS / editors
 # ---------------------------------------------------------------------------
 .DS_Store

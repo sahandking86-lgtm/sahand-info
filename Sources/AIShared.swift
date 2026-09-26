@@ -8,10 +8,10 @@ struct AIActionResponse {
     var title: String?   // title for a new note
     var content: String? // full body text for a new note, or the full new body for an update
     var segments: [AISegment] = [] // reply broken into pieces tagged by source note, for "none" answers
-    var categoryEnglish: String? = nil // suggested category in English, for create/update (online AI only)
-    var categoryKurdish: String? = nil // the same category in Kurdish, for create/update (online AI only)
-    var reminderDate: String? = nil // reminder date/time as a formatted local string (online AI only)
-    var reminderDone: Bool? = nil   // set/clear reminder completion, for set_reminder (online AI only)
+    var categoryEnglish: String? = nil // suggested category in English, for create/update
+    var categoryKurdish: String? = nil // the same category in Kurdish, for create/update
+    var reminderDate: String? = nil // reminder date/time as a formatted local string
+    var reminderDone: Bool? = nil   // set/clear reminder completion, for set_reminder
 }
 
 /// One piece of a "none"-action reply, optionally tied to the note it came from.
@@ -28,8 +28,8 @@ struct ConversationTurn {
     let text: String
 }
 
-/// Shared prompt + parsing logic used by both LocalAI and OnlineAI, so both engines
-/// speak the same "protocol" and AskView only has to handle one response shape.
+/// Shared prompt + parsing logic: the app and the AI speak this one "protocol", so
+/// AskView only ever has to handle a single response shape.
 enum AIProtocol {
     /// Plain local wall-clock time, no timezone conversion in either direction — the AI is told
     /// "now" in this format and asked to reply in the same format, so no UTC math can go wrong.

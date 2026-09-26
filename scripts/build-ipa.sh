@@ -4,18 +4,17 @@
 # so a green CI run and a local run can never drift apart.
 #
 # Usage:
-#   ./scripts/build-ipa.sh              # includes the ~2 GB offline model
-#   WITH_MODEL=0 ./scripts/build-ipa.sh # online-AI-only build (no download, fast)
+#   ./scripts/build-ipa.sh
 #
-# Needs: macOS with Xcode 16.3+ (swift-llama-cpp requires the Swift 6.1 toolchain),
-# and Homebrew's xcodegen. Signing is intentionally disabled — see the IPA notes below.
+# Needs: macOS with Xcode 15 or newer (anything with the iOS 17 SDK) and Homebrew's
+# xcodegen. There are no package dependencies to resolve, so the first build is quick.
+# Signing is intentionally left off — see the note printed at the end.
 #
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-WITH_MODEL="${WITH_MODEL:-1}"
 BUILD_DIR="${BUILD_DIR:-build}"
 APP_NAME="Sahand Info"          # PRODUCT_NAME from project.yml — the .app keeps this name
 SCHEME="${SCHEME:-SahandInfo}"
@@ -25,13 +24,6 @@ command -v xcodegen >/dev/null 2>&1 || {
   echo "error: xcodegen not found — install it with: brew install xcodegen" >&2
   exit 1
 }
-
-if [[ "$WITH_MODEL" == "1" ]]; then
-  "$REPO_ROOT/scripts/fetch-model.sh"
-else
-  echo "· skipping the offline model (WITH_MODEL=0) — Offline AI will report a missing model"
-  mkdir -p Resources            # project.yml lists Resources as a source folder
-fi
 
 echo "→ xcodegen generate"
 xcodegen generate
@@ -59,5 +51,6 @@ echo
 echo "✓ SahandInfo.ipa ready ($(du -h SahandInfo.ipa | cut -f1))"
 echo
 echo "It is UNSIGNED, like the CI artifact. To get it onto a phone, re-sign it with your own"
-echo "Apple ID using AltStore or Sideloadly, or rebuild here after setting a real"
-echo "DEVELOPMENT_TEAM / CODE_SIGN_IDENTITY in project.yml."
+echo "Apple ID using AltStore or Sideloadly, drop it on LiveContainer (which runs unsigned"
+echo "builds as-is), or set a real DEVELOPMENT_TEAM / CODE_SIGN_IDENTITY in project.yml and"
+echo "archive from Xcode."
