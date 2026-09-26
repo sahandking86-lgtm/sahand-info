@@ -177,8 +177,9 @@ def main(argv):
         "Assets.car": "present" if os.path.isfile(os.path.join(app, "Assets.car")) else "ABSENT",
         "PrivacyInfo.xcprivacy": "present" if os.path.isfile(os.path.join(app, "PrivacyInfo.xcprivacy")) else "absent (fine for a test build)",
         "embedded.mobileprovision": "present" if os.path.isfile(os.path.join(app, "embedded.mobileprovision")) else "absent (expected: LiveContainer re-signs)",
-        "UIRequiredDeviceCapabilities": str(info.get("UIRequiredDeviceCapabilities", "none (no gate)")),
+        "UIRequiredDeviceCapabilities": str(info.get("UIRequiredDeviceCapabilities", "none in source (Xcode injects arm64)")),
         "CFBundleSupportedPlatforms": str(info.get("CFBundleSupportedPlatforms", "not set")),
+        "MinimumOSVersion": str(info.get("MinimumOSVersion", "not set (build settings floor applies)")),
     }
 
     size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(app) for f in fs)

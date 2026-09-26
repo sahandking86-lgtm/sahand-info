@@ -44,11 +44,12 @@
 	<array>
 		<integer>1</integer>
 	</array>
-	<!-- No UIRequiredDeviceCapabilities at all. This file used to declare "armv7", which makes
-	     current 64-bit-only iPhones refuse the install; "arm64" fixes that but still adds a
-	     capability gate for no benefit. Omitting the key means "no special hardware
-	     requirements", which is what this app wants - and it leaves nothing here differing from
-	     the old build by value, only by additions. -->
+	<!-- Deliberately absent. This file used to pin "armv7", a 32-bit requirement that no iPhone
+	     since the 5s satisfies, and pinning "arm64" here would add a gate that buys nothing. Left
+	     out, Xcode injects UIRequiredDeviceCapabilities = [arm64] into the built plist by itself
+	     (confirmed against the artifact in CI), which is the correct value for the deployment
+	     target in project.yml. Omitting the key also means no value in this file differs from the
+	     old build - only additions. -->
 	<!-- Without a launch screen iOS runs the app letterboxed in a compatibility
 	     layout, so this empty dict (system-background launch screen) matters. -->
 	<key>UILaunchScreen</key>

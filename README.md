@@ -80,9 +80,11 @@ the container, except what needs a real install: no home-screen icon, no notific
 and haptics are unreliable.
 
 **Sideloadly / AltStore installs**: those check `UIRequiredDeviceCapabilities`. This file used to
-declare the legacy `armv7`, which makes current (64-bit-only) iPhones refuse the install, so the
-key is now absent entirely — no requirement means no gate, and LiveContainer ignores it either way.
-If you ever need to pin a capability, add the key back with `arm64`.
+declare the legacy `armv7` only, which is a 32-bit requirement no iPhone since the 5s can satisfy.
+The key is now left out and Xcode fills it in as `arm64` on its own — verified against the built
+`Info.plist`, not assumed — so nothing needs pinning. LiveContainer ignores the key either way;
+main's `armv7` build did install under it, which is worth remembering before blaming a launch
+failure on device capabilities.
 
 ## Layout
 
