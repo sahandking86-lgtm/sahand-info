@@ -90,7 +90,7 @@ Sources/
   SahandInfoApp.swift           UI, stores (notes, settings), themes, the local matcher
   AIShared.swift                The prompt + JSON protocol the assistant speaks
   OnlineAI.swift                Gemini REST calls, retries, category suggestions
-  Info.plist                    Hand-maintained (GENERATE_INFOPLIST_FILE is off)
+  Info.plist                    Hand-maintained, pointed at by INFOPLIST_FILE
 Resources/
   Assets.xcassets               App icon (single-size 1024×1024)
   PrivacyInfo.xcprivacy         Apple privacy manifest

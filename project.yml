@@ -30,7 +30,7 @@ targets:
     settings:
       base:
         # Keep this exactly as it was on main, space and all: "Sahand Info".
-        # LiveContainer keys each entry by bundle id (com.sahandinfo.app) and remembers the
+        # LiveContainer keys each entry by bundle id and remembers the
         # .app path for it, so changing the bundle/executable name between installs leaves the
         # existing entry pointing at a folder that no longer exists - which shows up as a
         # successful install (icon and name are re-read from the new Info.plist) followed by

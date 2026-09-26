@@ -44,8 +44,12 @@ jobs:
           {
             echo "## App bundle"
             echo "- executable: \`$exec_name\`"
-            echo "- UILaunchScreen: $(plutil -extract UILaunchScreen json "$app/Info.plist" >/dev/null 2>&1 && echo present || echo MISSING)"
-            echo "- app icon wired up: $(plutil -extract CFBundleIcons json "$app/Info.plist" >/dev/null 2>&1 && echo yes || echo 'no (actool did not inject it)')"
+            # Key presence read from the plist, not "plutil -extract": an empty dict such as
+            # UILaunchScreen is not extractable and would be reported as missing.
+            for k in UILaunchScreen CFBundleIcons CFBundleDisplayName; do
+              has=$(plutil -convert json -o - "$app/Info.plist" 2>/dev/null | python3 -c 'import json,sys; print("present" if sys.argv[1] in json.load(sys.stdin) else "MISSING")' "$k")
+              echo "- $k: $has"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
           tail -n 6 "$GITHUB_STEP_SUMMARY"
 

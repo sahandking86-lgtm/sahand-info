@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Hand-maintained Info.plist. project.yml points INFOPLIST_FILE here and sets
-  GENERATE_INFOPLIST_FILE: NO, so keys like UILaunchScreen belong in this file and
-  not in INFOPLIST_KEY_* build settings. $(...) values are substituted by Xcode at build time.
+  Hand-maintained Info.plist: project.yml points INFOPLIST_FILE at it, so keys like
+  UILaunchScreen belong in this file rather than in INFOPLIST_KEY_* build settings.
+  $(...) values are substituted by Xcode at build time. Every value here matches main; the only
+  differences are added keys (UILaunchScreen, CFBundleDisplayName, ITSAppUsesNonExemptEncryption,
+  CADisableMinimumFrameDurationOnPhone) and the removed UIRequiredDeviceCapabilities gate.
 -->
 <plist version="1.0">
 <dict>

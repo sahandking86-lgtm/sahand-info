@@ -93,8 +93,13 @@ jobs:
           [ -z "$want_ver" ] || [ "$ver" = "$want_ver" ] || { echo "::error::built version '$ver' != project.yml '$want_ver'"; exit 1; }
 
           # actool injects these; if they are missing the icon is gone or the app is letterboxed.
-          icon=$(plutil -extract CFBundleIcons json "$plist" >/dev/null 2>&1 && echo present || echo "absent (actool did not inject)")
-          launch=$(plutil -extract UILaunchScreen json "$plist" >/dev/null 2>&1 && echo present || echo absent)
+          # Presence is read from the plist itself rather than "plutil -extract": an empty dict
+          # (UILaunchScreen is exactly that) is not extractable, so an extractor reports it as
+          # missing and sends you chasing a launch screen that is actually fine.
+          key() { plutil -convert json -o - "$plist" 2>/dev/null | python3 -c 'import json,sys; print("present" if sys.argv[1] in json.load(sys.stdin) else "ABSENT")' "$1"; }
+          icon=$(key CFBundleIcons)
+          launch=$(key UILaunchScreen)
+          dname=$(key CFBundleDisplayName)
           car=$([ -f "$app/Assets.car" ] && echo present || echo absent)
           priv=$([ -f "$app/PrivacyInfo.xcprivacy" ] && echo present || echo absent)
           archs=$(lipo -archs "$app/$exec_name" 2>/dev/null || echo unknown)
@@ -104,13 +109,14 @@ jobs:
           sig=$(codesign -dv "$app" 2>&1 | head -n 1)
 
           echo "::warning::[sahand-info] bundle=$(basename "$app") id=$bid version=$ver exec=$exec_name archs=$archs size=$(du -sh "$app" | cut -f1)"
-          echo "::warning::[sahand-info] Assets.car=$car privacy=$priv icon=$icon launchscreen=$launch"
+          echo "::warning::[sahand-info] Assets.car=$car privacy=$priv CFBundleIcons=$icon UILaunchScreen=$launch CFBundleDisplayName=$dname"
           echo "::warning::[sahand-info] signature=$sig"
-          echo "::warning::[sahand-info] plist=$(plutil -convert json -o - "$plist" 2>/dev/null | tr -d '\n')"
+          # Key names only: short enough that GitHub never truncates it, unlike a raw plist dump.
+          echo "::warning::[sahand-info] keys=$(plutil -convert json -o - "$plist" 2>/dev/null | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin))))')"
           {
             echo "### Built bundle (this is what build.yml ships)"
             echo "- \`$(basename "$app")\` — id \`$bid\`, version \`$ver\`, arch \`$archs\`"
             echo "- executable \`$exec_name\`: present, Mach-O"
-            echo "- Assets.car: $car · PrivacyInfo: $priv · CFBundleIcons: $icon · UILaunchScreen: $launch"
+            echo "- Assets.car: $car · PrivacyInfo: $priv · CFBundleIcons: $icon · UILaunchScreen: $launch · display name: $dname"
             echo "- signature: $sig (unsigned on purpose - LiveContainer re-signs it)"
           } >> "$GITHUB_STEP_SUMMARY"
