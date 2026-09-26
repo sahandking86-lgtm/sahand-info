@@ -55,19 +55,19 @@ enum AIFailure: Equatable {
         }
     }
 
-    private var retryable: Bool {
+    var retryable: Bool {
         switch self {
         case .rateLimited, .serverBusy, .offline, .timeout: return true
         default: return false
         }
     }
-
-    static func retryable(_ failure: AIFailure) -> Bool { failure.retryable }
 }
 
 /// Boxed Int so the enum stays Equatable without a synthetic conformance fight.
-struct IntegerValue: Equatable, ExpressibleByIntegerLiteral, CustomStringConvertible {
+/// A status code, boxed so `AIFailure` stays Equatable without a synthetic-conformance fight.
+struct IntegerValue: Equatable, ExpressibleByIntegerLiteral, CustomStringConvertible, Hashable {
     var value: Int
+    init(value: Int) { self.value = value }
     init(integerLiteral: Int) { value = integerLiteral }
     var description: String { String(value) }
 }
@@ -187,7 +187,7 @@ enum OnlineAI {
     // MARK: - Shared request
 
     private static func sendRequest(body: [String: Any], apiKey: String, attempts: Int = 3) async -> AIOutcome {
-        guard let url = endpoint else { return .failure(.badRequest) }
+        guard let url = endpoint else { return .failure(.badRequest(0)) }
 
         var lastFailure: AIFailure = .offline
         for attempt in 1...max(1, attempts) {

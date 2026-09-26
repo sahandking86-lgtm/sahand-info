@@ -209,7 +209,7 @@ final class AppCoordinator: ObservableObject {
         guard !words.isEmpty, words.count <= 4 else { return false }
         let yes: Set<String> = ["yes", "yeah", "yep", "sure", "ok", "okay", "do", "it", "confirm",
                                 "delete", "remove", "go", "ahead", "please", "yesdo", "y"]
-        return !words.isDisjoint(with: yes) && words.allSatisfy { yes.contains($0) }
+        return !Set(words).isDisjoint(with: yes) && words.allSatisfy { yes.contains($0) }
     }
 
     static func isNegative(_ text: String) -> Bool {

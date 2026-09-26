@@ -85,8 +85,8 @@ jobs:
           fi
 
           encode() { tr -d '\r' | sed 's/%/%25/g; s/\r//g' | cut -c1-400; }
-          grep -E 'error: ' "$log" | grep -v 'deprecated' | awk '!seen[$0]++' | head -n 30 > "$RUNNER_TEMP/errors.txt" || true
-          grep -E 'warning: ' "$log" | grep -v -E 'deprecated|nodirectory' | awk '!seen[$0]++' | head -n 20 > "$RUNNER_TEMP/warnings.txt" || true
+          grep -E 'error: ' "$log" | grep -v 'deprecated' | awk '!seen[$0]++' | head -n 60 > "$RUNNER_TEMP/errors.txt" || true
+          grep -E 'warning: ' "$log" | grep -v -E 'deprecated|nodirectory' | awk '!seen[$0]++' | head -n 25 > "$RUNNER_TEMP/warnings.txt" || true
 
           while IFS= read -r line; do
             printf '::error::%s\n' "$(printf '%s' "$line" | encode)"

@@ -317,7 +317,7 @@ enum AIProtocol {
                     if depth == 0 { end = index; break }
                 }
             }
-            text.index(after: &index)
+            index = text.index(after: index)
         }
         guard let end else { return nil }
         let slice = String(text[start...end])
