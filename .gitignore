@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Generated Xcode project — SahandInfo.xcodeproj is produced by `xcodegen
+# generate` from project.yml, so it is never committed.
+# ---------------------------------------------------------------------------
+SahandInfo.xcodeproj/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# ---------------------------------------------------------------------------
+# Build products / CI output
+# ---------------------------------------------------------------------------
+build/
+DerivedData/
+*.ipa
+*.app.dSYM.zip
+*.dSYM.zip
+*.dSYM
+Payload/
+.spm/
+SourcePackages/
+buildServer.json
+
+# ---------------------------------------------------------------------------
+# The offline GGUF model (~2.3 GB) — downloaded by scripts/fetch-model.sh,
+# never committed. See Resources/README.md.
+# ---------------------------------------------------------------------------
+Resources/*.gguf
+Resources/*.gguf.part
+*.gguf
+Models/
+
+# ---------------------------------------------------------------------------
+# macOS / editors
+# ---------------------------------------------------------------------------
+.DS_Store
+._*
+*.swp
+*~
+.idea/
+.vscode/

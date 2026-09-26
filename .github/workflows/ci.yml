@@ -1,0 +1,71 @@
+# Fast check on every push / pull request: the repo has to be able to produce a
+# working Xcode project and compile. This is the same pipeline as build.yml minus the
+# ~2 GB model download and the packaging/upload steps. Docs-only changes skip it, since
+# macOS runner minutes are expensive.
+name: CI
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check plists (Info.plist, privacy manifest)
+        run: plutil -lint Sources/Info.plist Resources/PrivacyInfo.xcprivacy
+
+      - name: Check asset catalog metadata
+        run: |
+          python3 -m json.tool Resources/Assets.xcassets/Contents.json > /dev/null
+          python3 -m json.tool Resources/Assets.xcassets/AppIcon.appiconset/Contents.json > /dev/null
+
+      # actool rejects an app icon that is not square or carries an alpha channel,
+      # and a wrong size shows up as a blurry icon on the home screen.
+      - name: Check app icon is a 1024x1024 opaque PNG
+        run: |
+          info=$(sips -g pixelWidth -g pixelHeight -g hasAlpha -g format \
+            Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png)
+          echo "$info"
+          echo "$info" | grep -q "pixelWidth: 1024"
+          echo "$info" | grep -q "pixelHeight: 1024"
+          # sips omits hasAlpha entirely for files with no alpha channel, so only a
+          # positive "yes" is a failure here.
+          ! echo "$info" | grep -q "hasAlpha: yes"
+          echo "$info" | grep -q "format: png"
+
+      - name: Check scripts parse
+        run: |
+          for f in scripts/*.sh; do
+            bash -n "$f"
+            echo "ok: $f"
+          done
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (online AI only, no bundled model)
+        run: |
+          xcodebuild -project SahandInfo.xcodeproj \
+            -scheme SahandInfo \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build

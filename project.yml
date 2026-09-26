@@ -1,21 +1,41 @@
+# XcodeGen spec. The .xcodeproj is generated from this file and is .gitignored:
+#
+#   brew install xcodegen && xcodegen generate
+#
+# Edit this file (and Sources/Info.plist) instead of the generated project.
 name: SahandInfo
 options:
   bundleIdPrefix: com.sahandinfo
+  # Mirrors the folder layout in Xcode's navigator instead of one flat list.
+  createIntermediateGroups: true
 packages:
+  # Offline AI (llama.cpp wrapper). swift-llama-cpp 1.1+ declares swift-tools-version
+  # 6.1, so Xcode 16.3 or newer is required to resolve and build it. The package also
+  # downloads a ~200 MB llama.cpp XCFramework on first build.
   SwiftLlama:
     url: https://github.com/pgorzelany/swift-llama-cpp
     from: "1.0.0"
+configs:
+  Debug: debug
+  Release: release
 targets:
   SahandInfo:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
-    infoPlistPath: Sources/Info.plist
     sources:
       - path: Sources
+      # Both folders must exist — XcodeGen errors on a missing source path.
+      # Resources/model.gguf (the offline model) is gitignored; see Resources/README.md.
       - path: Resources
+        excludes:
+          - "README.md"
     dependencies:
       - package: SwiftLlama
+    # NOTE: deliberately no `info:` block. XcodeGen *rewrites* the file named by
+    # `info.path`, which would wipe the hand-maintained keys out of Sources/Info.plist.
+    # Setting INFOPLIST_FILE below points Xcode at the same file without touching it
+    # (XcodeGen also then skips copying Info.plist into the app bundle's resources).
     settings:
       base:
         PRODUCT_NAME: "Sahand Info"
@@ -27,4 +47,20 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""
         TARGETED_DEVICE_FAMILY: "1"
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # The Info.plist is hand-maintained (see Sources/Info.plist), so Xcode must not
+        # synthesize one from INFOPLIST_KEY_* build settings. That also means keys like
+        # UILaunchScreen have to live in the plist file itself.
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Sources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+# An explicit shared scheme, so `xcodebuild -scheme SahandInfo` works from CI on a
+# freshly generated project without relying on Xcode autocreating one.
+schemes:
+  SahandInfo:
+    build:
+      targets:
+        SahandInfo: all
+    run:
+      config: Debug
+    archive:
+      config: Release

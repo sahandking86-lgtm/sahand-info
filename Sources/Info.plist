@@ -1,30 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hand-maintained Info.plist. project.yml points INFOPLIST_FILE here and sets
+  GENERATE_INFOPLIST_FILE: NO, so keys like UILaunchScreen belong in this file and
+  not in INFOPLIST_KEY_* build settings. $(...) values are substituted by Xcode at build time.
+-->
 <plist version="1.0">
 <dict>
-	<key>UIDeviceFamily</key>
-	<array>
-		<integer>1</integer>
-	</array>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
-	</array>
-	<key>UISupportedInterfaceOrientations</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sahand Info</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -41,10 +27,46 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Nothing talks to the network except the Gemini call over HTTPS, so no
+	     arbitrary loads are allowed. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
+	<!-- Only standard TLS is used, which is exempt from export compliance paperwork. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- iPhone only, matching TARGETED_DEVICE_FAMILY: 1 in project.yml. -->
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+	<!-- arm64 — the old armv7 requirement makes current (64-bit-only) iPhones refuse
+	     to install the app. -->
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<!-- Without a launch screen iOS runs the app letterboxed in a compatibility
+	     layout, so this empty dict (system-background launch screen) matters. -->
+	<key>UILaunchScreen</key>
+	<dict/>
+	<!-- The UI is animation-heavy; let ProMotion displays run at their native rate. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>

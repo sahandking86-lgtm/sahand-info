@@ -1,24 +1,42 @@
 name: Build IPA
 on:
   workflow_dispatch:
+    inputs:
+      offline_model:
+        description: "Bundle the ~2 GB offline AI model (Resources/model.gguf)"
+        type: boolean
+        default: true
+
+# Two runs of this workflow are pointless and the model download is heavy.
+concurrency:
+  group: build-ipa
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 60
     env:
       HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
     steps:
       - uses: actions/checkout@v4
 
       - name: Download local AI model
-        run: |
-          mkdir -p Resources
-          curl -L -f "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" -o Resources/model.gguf
-          ls -lh Resources/model.gguf
+        if: ${{ inputs.offline_model }}
+        run: bash scripts/fetch-model.sh
+
+      # Skipped on purpose: the app builds and runs without it, and Sources/LocalAI.swift
+      # reports "Model file missing from app bundle." only if Offline AI is actually used.
+      - name: Note missing offline model
+        if: ${{ !inputs.offline_model }}
+        run: echo "Building without Resources/model.gguf — Online AI (Gemini) only." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
       - name: Generate Xcode project
         run: xcodegen generate
+
       - name: Build unsigned app
         run: |
           xcodebuild -project SahandInfo.xcodeproj \
@@ -28,13 +46,19 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+
       - name: Package IPA
         run: |
+          rm -rf Payload SahandInfo.ipa
           mkdir -p Payload
           cp -r "build/Build/Products/Release-iphoneos/Sahand Info.app" Payload/
-          zip -r SahandInfo.ipa Payload
+          zip -qry SahandInfo.ipa Payload
+          rm -rf Payload
+          ls -lh SahandInfo.ipa
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: SahandInfo-ipa
           path: SahandInfo.ipa
+          if-no-files-found: error
