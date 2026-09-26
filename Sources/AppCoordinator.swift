@@ -180,8 +180,8 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    func say(_ text: String, actionLabel: String? = nil, noteID: UUID? = nil, undoes: Bool = false) {
-        notice = AppNotice(text: text, actionLabel: actionLabel, noteID: noteID, undoes: undoes)
+    func say(_ text: String, actionLabel: String? = nil, noteID: UUID? = nil, undoes: Bool = false, goToAsk: Bool = false) {
+        notice = AppNotice(text: text, actionLabel: actionLabel, noteID: noteID, undoes: undoes, goToAsk: goToAsk)
         noticeTask?.cancel()
         noticeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)

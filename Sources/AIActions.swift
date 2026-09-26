@@ -436,6 +436,20 @@ enum AIActions {
         } else {
             let targets = parsed.targets.isEmpty ? [parsed.target ?? ""] : parsed.targets
             for target in targets where !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let words = Set(QuestionAnswerer.tokenize(target))
+                // The dangerous case this replaces: answering "delete all my notes" with target "all"
+                // used to fuzzy-match whichever note happened to contain "all" and offer *that* one.
+                // A request made only of bulk words now means the whole set; nothing else is guessed.
+                let generic: Set<String> = ["all", "everything", "every", "them", "those", "these",
+                                            "note", "notes", "my", "the", "of", "it", "any"]
+                if !words.isEmpty, words.isSubset(of: generic) {
+                    if !words.isDisjoint(with: ["all", "everything", "every", "any"]) {
+                        victims = notes
+                        break
+                    }
+                    unmatched.append(target)
+                    continue
+                }
                 if let match = QuestionAnswerer.bestMatchingNote(for: target, in: notes) {
                     if !victims.contains(where: { $0.id == match.id }) { victims.append(match) }
                 } else {

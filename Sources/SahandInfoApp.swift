@@ -312,6 +312,11 @@ private struct AppNoticeBar: View {
             }
             return
         }
+        if notice.goToAsk {
+            coordinator.selectedTab = .ask
+            coordinator.dismissNotice()
+            return
+        }
         if let id = notice.noteID {
             coordinator.reveal(noteID: id, in: notesStore)
         }
@@ -1829,6 +1834,7 @@ struct AskView: View {
     /// Bumped whenever a request becomes irrelevant. Late answers used to be applied no matter what
     /// had happened meanwhile - so a note could appear after the chat had been cleared.
     @State private var generation = 0
+    @State private var scrollTargetID: UUID?
     @FocusState private var isInputFocused: Bool
 
     private let suggestions = [
@@ -1967,6 +1973,11 @@ struct AskView: View {
             .scrollDismissesKeyboard(.interactively)
             // The answer *replaces* the waiting bubble, so the count does not change and the old
             // trigger left the finished answer below the fold. Watching the last id covers both.
+            .onChange(of: scrollTargetID) { _, target in
+                guard let target else { return }
+                withAnimation(.snappy) { proxy.scrollTo(target, anchor: .center) }
+                scrollTargetID = nil
+            }
             .onChange(of: scrollToken) { _, _ in
                 guard let lastID = messages.last?.id else { return }
                 withAnimation(.snappy) { proxy.scrollTo(lastID, anchor: .bottom) }
@@ -1991,10 +2002,11 @@ struct AskView: View {
         case .answerCard(let result):
             HStack(alignment: .top, spacing: 0) {
                 AnswerCardView(result: result) {
-                    coordinator.reveal(noteID: result.matchedNote.id,
-                                       in: notesStore,
-                                       highlight: result.extractedAnswer,
-                                       highlightLine: result.matchedLine)
+                    let opened = coordinator.reveal(noteID: result.matchedNote.id,
+                                                    in: notesStore,
+                                                    highlight: result.extractedAnswer,
+                                                    highlightLine: result.matchedLine)
+                    if !opened { coordinator.say("That note was deleted, so there's nothing to open.") }
                 }
                 .frame(maxWidth: 320, alignment: .leading)
                 Spacer(minLength: 24)
@@ -2248,10 +2260,7 @@ struct AskView: View {
                         if case .confirmation(let candidate, let answered) = $0.kind { return candidate.id == pending.id && answered == nil }
                         return false
                     }) {
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 120_000_000)
-                            withAnimation(.snappy) { proxylessScroll(to: messages[index].id) }
-                        }
+                        withAnimation(.snappy) { scrollTargetID = messages[index].id }
                     }
                 } label: {
                     Label("A change is waiting for you: \(pending.question)", systemImage: "hand.raised.fill")
@@ -2305,10 +2314,6 @@ struct AskView: View {
             .padding(.vertical, 10)
         }
         .background(.bar)
-    }
-
-    private func proxylessScroll(to id: UUID) {
-        coordinator.scrollRequest = id
     }
 
     /// Resigns the on-screen keyboard. Clears the FocusState binding and also
@@ -2566,8 +2571,13 @@ struct AskView: View {
 
 struct AnswerCardView: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var notesStore: NotesStore
     let result: AnswerResult
     let onTapNote: () -> Void
+
+    /// The live note rather than the snapshot taken when the answer was produced, so a rename shows
+    /// the new name and a deletion is admitted instead of pushing a screen saying "Note Not Found".
+    private var live: Note? { notesStore.note(id: result.matchedNote.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2590,10 +2600,10 @@ struct AnswerCardView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "note.text")
                         .foregroundStyle(settings.theme.endColor)
-                    Text(result.matchedNote.title.isEmpty ? "Untitled" : result.matchedNote.title)
+                    Text(live.map { $0.title.isEmpty ? "Untitled" : $0.title } ?? "This note was deleted")
                         .lineLimit(1)
                     Spacer()
-                    Image(systemName: "chevron.right")
+                    Image(systemName: live == nil ? "questionmark.circle" : "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
