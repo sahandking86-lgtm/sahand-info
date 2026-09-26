@@ -52,8 +52,8 @@ targets:
         # version when behavior changes noticeably - it is the quickest way on the phone to tell
         # which build you are holding. Updating under the same bundle id keeps your notes; only a
         # bundle *id* change loses the container's path, which is the trap documented above.
-        MARKETING_VERSION: "2.2"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "2.3"
+        CURRENT_PROJECT_VERSION: "3"
         SWIFT_VERSION: "5.0"
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
