@@ -24,6 +24,10 @@ SourcePackages/
 buildServer.json
 
 # ---------------------------------------------------------------------------
+# Python cache (from scripts/check-bundle.py self-tests)
+__pycache__/
+*.pyc
+
 # macOS / editors
 # ---------------------------------------------------------------------------
 .DS_Store

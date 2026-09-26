@@ -64,15 +64,45 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
+      # The log text of a failed build is not reachable from a dev sandbox (it lives on the
+      # artifact/log endpoints, which answer 403), but annotations are served by api.github.com.
+      # So every compile error and warning is mirrored into an annotation: a big Swift change can
+      # be iterated on from here, one push at a time, without anyone reading a log in a browser.
       - name: Build app
         run: |
-          xcodebuild -project SahandInfo.xcodeproj \
+          set -o pipefail
+          log="$RUNNER_TEMP/xcodebuild.log"
+          if xcodebuild -project SahandInfo.xcodeproj \
             -scheme SahandInfo \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee "$log"; then
+            status=0
+          else
+            status=1
+          fi
+
+          encode() { tr -d '\r' | sed 's/%/%25/g; s/\r//g' | cut -c1-400; }
+          grep -E 'error: ' "$log" | grep -v 'deprecated' | awk '!seen[$0]++' | head -n 30 > "$RUNNER_TEMP/errors.txt" || true
+          grep -E 'warning: ' "$log" | grep -v -E 'deprecated|nodirectory' | awk '!seen[$0]++' | head -n 20 > "$RUNNER_TEMP/warnings.txt" || true
+
+          while IFS= read -r line; do
+            printf '::error::%s\n' "$(printf '%s' "$line" | encode)"
+          done < "$RUNNER_TEMP/errors.txt"
+          while IFS= read -r line; do
+            printf '::warning::[compile] %s\n' "$(printf '%s' "$line" | encode)"
+          done < "$RUNNER_TEMP/warnings.txt"
+
+          if [ "$status" -ne 0 ] && [ ! -s "$RUNNER_TEMP/errors.txt" ]; then
+            # Nothing matched the usual "<file>:<line>:<col>: error:" shape - the failure is
+            # elsewhere (linker, script phase, xcodebuild itself). Send the tail so it is readable.
+            tail -n 25 "$log" | while IFS= read -r line; do
+              printf '::error::[tail] %s\n' "$(printf '%s' "$line" | encode)"
+            done
+          fi
+          exit "$status"
 
       # Runs the same assertions scripts/check-bundle.py makes against the shipped archive, so a
       # bundle a container launcher could not spawn never even reaches the packaging step. Also
