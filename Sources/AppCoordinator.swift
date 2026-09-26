@@ -34,7 +34,10 @@ struct NoteRoute: Hashable {
 /// what to do is how approving a card could end up doing nothing at all.
 enum ConfirmationWork: Equatable {
     case deleteNotes([UUID])
-    case rewriteNote(id: UUID, title: String, body: String)
+    /// `original` is the body the preview was built against. It is checked again on approval, because
+    /// a rewrite that was offered while the note was still being edited would otherwise replace work
+    /// the user did after seeing the card - the same trap the import screen had.
+    case rewriteNote(id: UUID, title: String, body: String, original: String)
 }
 
 /// A change the assistant wants confirmed before it happens. Kept here rather than inside a chat
@@ -87,21 +90,21 @@ final class AppCoordinator: ObservableObject {
     /// user was looking at another tab when it happened.
     @Published private(set) var recentlyChanged: [UUID] = []
 
-    /// A note to bring into view. `nonce` makes every request distinct even for a repeat of the
-    /// same note, which is what lets SwiftUI's `onChange` see it.
-    struct ScrollRequest: Equatable {
-        let noteID: UUID
-        let nonce = UUID()
-    }
     @Published var pendingConfirmation: PendingConfirmation? = nil
     @Published var notice: AppNotice? = nil
     /// Set when Settings should be presented; the Notes tab owns the sheet, and every other route
     /// to Settings (including the assistant) just flips this.
     @Published var showingSettings = false
+    /// A note to bring into view. The nonce matters: asking for the same note twice in a row is the
+    /// same UUID, and `onChange` does not fire for a value that has not changed - so the second
+    /// request looked ignored.
+    struct ScrollRequest: Equatable {
+        let noteID: UUID
+        let nonce = UUID()
+    }
+
     /// Set by `reveal` so the list can scroll the note into view, not just open it. Without this,
     /// "show me what you changed" landed on a screen where the note was further down and unseen.
-    /// The nonce matters: asking for the same note twice in a row is the same UUID, and `onChange`
-    /// does not fire for a value that has not changed - so the second request looked ignored.
     @Published var scrollRequest: ScrollRequest? = nil
     /// Set when somewhere else wants the user in the Ask tab with a question already typed -
     /// "Ask the AI to remind you about this" used to be a sentence with no button behind it, and the

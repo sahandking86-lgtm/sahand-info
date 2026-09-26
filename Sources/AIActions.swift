@@ -95,7 +95,8 @@ enum AIActions {
                     noteIDs: [match.id],
                     noteTitles: [title(of: match)],
                     isDestructive: true,
-                    work: .rewriteNote(id: match.id, title: parsed.title ?? match.title, body: newBody)
+                    work: .rewriteNote(id: match.id, title: parsed.title ?? match.title,
+                                       body: newBody, original: match.body)
                 )
                 result.reply = "That would replace the whole note. Check the card below first — or ask me to change just the part you mean."
                 result.outcomeForHistory = "[waiting] asked the user to confirm a full rewrite of \"\(title(of: match))\""
@@ -529,9 +530,12 @@ enum AIActions {
             coordinator.say("Deleted \(targets.count) note\(targets.count == 1 ? "" : "s").", actionLabel: "Undo", undoes: true)
             return "Deleted \(targets.count) note\(targets.count == 1 ? "" : "s"). Undo brings \(targets.count == 1 ? "it" : "them") back."
 
-        case .rewriteNote(let id, let newTitle, let newBody):
+        case .rewriteNote(let id, let newTitle, let newBody, let original):
             guard var note = store.note(id: id) else {
                 return "That note isn't there any more, so nothing was rewritten."
+            }
+            guard note.body == original else {
+                return "That note changed while the card was waiting, so I didn't overwrite it. Ask me again and I'll work from the newer text."
             }
             let previousCount = note.body.count
             if !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { note.title = newTitle }
