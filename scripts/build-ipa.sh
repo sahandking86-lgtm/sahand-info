@@ -16,7 +16,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BUILD_DIR="${BUILD_DIR:-build}"
-APP_NAME="SahandInfo"          # PRODUCT_NAME from project.yml — no space, on purpose
+APP_NAME="Sahand Info"          # PRODUCT_NAME from project.yml — space and all, as on main
 SCHEME="${SCHEME:-SahandInfo}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 
@@ -42,12 +42,25 @@ APP_PATH="$BUILD_DIR/Build/Products/${CONFIGURATION}-iphoneos/$APP_NAME.app"
 [[ -n "$APP_PATH" && -d "$APP_PATH" ]] || { echo "error: no .app produced under $BUILD_DIR/Build/Products/${CONFIGURATION}-iphoneos" >&2; exit 1; }
 echo "· bundle: $APP_PATH"
 
+echo "→ checking the bundle is launchable (same assertions as CI)"
+python3 scripts/check-bundle.py "$APP_PATH" || {
+  echo "error: the built bundle is not launchable — see the reason above" >&2
+  exit 1
+}
+
 echo "→ packaging SahandInfo.ipa"
 rm -rf Payload SahandInfo.ipa
 mkdir -p Payload
 cp -R "$APP_PATH" Payload/
 zip -r SahandInfo.ipa Payload
 rm -rf Payload
+
+echo "→ checking the copy inside the archive"
+rm -rf "${TMPDIR:-/tmp}/sahand-verify"
+mkdir -p "${TMPDIR:-/tmp}/sahand-verify"
+unzip -q -o SahandInfo.ipa -d "${TMPDIR:-/tmp}/sahand-verify"
+python3 scripts/check-bundle.py "$(find "${TMPDIR:-/tmp}/sahand-verify/Payload" -maxdepth 1 -name '*.app' -type d | head -n 1)"
+rm -rf "${TMPDIR:-/tmp}/sahand-verify"
 
 echo
 echo "✓ SahandInfo.ipa ready ($(du -h SahandInfo.ipa | cut -f1))"

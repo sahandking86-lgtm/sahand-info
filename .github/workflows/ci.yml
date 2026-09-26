@@ -53,6 +53,11 @@ jobs:
             echo "ok: $f"
           done
 
+      # The next steps only mean something if this checker means what it says, so it is tested
+      # on every push, before it is allowed to bless a build.
+      - name: Self-test the bundle checker
+        run: python3 scripts/test-check-bundle.py
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -69,54 +74,28 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
 
-      # Every push, not just manual IPA runs: assert the produced bundle is shaped the way a
-      # container launcher (LiveContainer) needs it - a real .app, an Info.plist whose
-      # CFBundleExecutable resolves to an existing Mach-O file, and the icon/launch-screen keys
-      # that decide whether the icon shows and the app runs full-screen. It also mirrors project.yml
-      # so a plist that drifted from the spec fails here instead of on a phone. Facts are emitted
-      # as annotations: they are readable straight from the API, unlike log text.
+      # Runs the same assertions scripts/check-bundle.py makes against the shipped archive, so a
+      # bundle a container launcher could not spawn never even reaches the packaging step. Also
+      # pins the two numbers installers key on to what project.yml declares, which catches a
+      # hand-maintained Info.plist drifting from the spec.
       - name: Verify built app bundle is launchable
         run: |
           app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
           test -n "$app" || { echo "::error::no .app produced by xcodebuild"; exit 1; }
-          plist="$app/Info.plist"
-          exec_name=$(plutil -extract CFBundleExecutable raw "$plist")
-          test -f "$app/$exec_name" || { echo "::error::'$app' has no executable named '$exec_name'"; exit 1; }
-          file "$app/$exec_name" | grep -q "Mach-O" || { echo "::error::$exec_name is not a Mach-O binary"; exit 1; }
-
-          # The two numbers a launcher actually keys on: bundle id and short version.
-          bid=$(plutil -extract CFBundleIdentifier raw "$plist")
-          ver=$(plutil -extract CFBundleShortVersionString raw "$plist")
+          report=$(python3 scripts/check-bundle.py -v "$app" 2>&1) || {
+            echo "::error::$(printf '%s' "$report" | tr '\n' ' ')"; exit 1; }
           want_bid=$(awk '/PRODUCT_BUNDLE_IDENTIFIER:/ {gsub(/[",]/,"",$2); print $2; exit}' project.yml)
           want_ver=$(awk '/MARKETING_VERSION:/ {gsub(/[",]/,"",$2); print $2; exit}' project.yml)
-          [ -z "$want_bid" ] || [ "$bid" = "$want_bid" ] || { echo "::error::built id '$bid' != project.yml '$want_bid'"; exit 1; }
-          [ -z "$want_ver" ] || [ "$ver" = "$want_ver" ] || { echo "::error::built version '$ver' != project.yml '$want_ver'"; exit 1; }
-
-          # actool injects these; if they are missing the icon is gone or the app is letterboxed.
-          # Presence is read from the plist itself rather than "plutil -extract": an empty dict
-          # (UILaunchScreen is exactly that) is not extractable, so an extractor reports it as
-          # missing and sends you chasing a launch screen that is actually fine.
-          key() { plutil -convert json -o - "$plist" 2>/dev/null | python3 -c 'import json,sys; print("present" if sys.argv[1] in json.load(sys.stdin) else "ABSENT")' "$1"; }
-          icon=$(key CFBundleIcons)
-          launch=$(key UILaunchScreen)
-          dname=$(key CFBundleDisplayName)
-          car=$([ -f "$app/Assets.car" ] && echo present || echo absent)
-          priv=$([ -f "$app/PrivacyInfo.xcprivacy" ] && echo present || echo absent)
-          archs=$(lipo -archs "$app/$exec_name" 2>/dev/null || echo unknown)
-          case " $archs " in *" i386 "*|*" x86_64 "*|*" armv7 "*)
-            echo "::error::binary carries simulator/32-bit slices: $archs"; exit 1;;
-          esac
-          sig=$(codesign -dv "$app" 2>&1 | head -n 1)
-
-          echo "::warning::[sahand-info] bundle=$(basename "$app") id=$bid version=$ver exec=$exec_name archs=$archs size=$(du -sh "$app" | cut -f1)"
-          echo "::warning::[sahand-info] Assets.car=$car privacy=$priv CFBundleIcons=$icon UILaunchScreen=$launch CFBundleDisplayName=$dname"
-          echo "::warning::[sahand-info] signature=$sig"
-          # Key names only: short enough that GitHub never truncates it, unlike a raw plist dump.
-          echo "::warning::[sahand-info] keys=$(plutil -convert json -o - "$plist" 2>/dev/null | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin))))')"
+          bid=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleIdentifier"])' "$app/Info.plist")
+          ver=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleShortVersionString"])' "$app/Info.plist")
           {
-            echo "### Built bundle (this is what build.yml ships)"
-            echo "- \`$(basename "$app")\` — id \`$bid\`, version \`$ver\`, arch \`$archs\`"
-            echo "- executable \`$exec_name\`: present, Mach-O"
-            echo "- Assets.car: $car · PrivacyInfo: $priv · CFBundleIcons: $icon · UILaunchScreen: $launch · display name: $dname"
-            echo "- signature: $sig (unsigned on purpose - LiveContainer re-signs it)"
+            [ -z "$want_bid" ] || [ "$bid" = "$want_bid" ]
+            [ -z "$want_ver" ] || [ "$ver" = "$want_ver" ]
+          } || { echo "::error::built id/version ($bid, $ver) do not match project.yml ($want_bid, $want_ver)"; exit 1; }
+          while IFS= read -r line; do echo "::warning::[sahand-info] $line"; done <<< "$report"
+          {
+            echo "## Built bundle"
+            echo '```'
+            echo "$report"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

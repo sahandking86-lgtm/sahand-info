@@ -56,8 +56,10 @@ local — but *AI Answer* replies with "Add your Gemini API key in Settings firs
 ### Building an IPA
 
 - **From CI**: Actions → **Build IPA** → *Run workflow* → pick the branch. No options; it
-  just generates the project, compiles for `iphoneos`, and uploads an unsigned
-  `SahandInfo.ipa` artifact (a few minutes).
+  generates the project, compiles for `iphoneos`, then runs `scripts/check-bundle.py` on the
+  bundle **inside the zipped archive** — a red "Validate packaged IPA" step means the artifact
+  itself is unusable, a green one means the package is launchable-shaped and any remaining
+  problem is on the phone. Uploads an unsigned `SahandInfo.ipa` artifact (a few minutes).
 - **Locally**: `./scripts/build-ipa.sh`, which runs the same steps.
 
 The IPA is **unsigned** — there is no certificate or provisioning profile in this repo. Get it
@@ -95,10 +97,14 @@ Resources/
   Assets.xcassets               App icon (single-size 1024×1024)
   PrivacyInfo.xcprivacy         Apple privacy manifest
 scripts/
-  build-ipa.sh                  generate → build → package .ipa, same as CI
+  check-bundle.py               Asserts a .app is launchable (used by both workflows, runs anywhere)
+  test-check-bundle.py          Self-test for the above; CI runs it before it trusts the checker
+  build-ipa.sh                  generate → build → verify → package .ipa → verify inside the archive
 .github/workflows/
-  ci.yml                        On every push/PR: validate plists, icon, scripts, then compile
-  build.yml                     Manual: release build + unsigned IPA artifact
+  ci.yml                        On every push/PR: validate plists, icon, scripts, compile, then
+                                assert the built .app is launchable
+  build.yml                     Manual: release build + unsigned IPA artifact, validated again
+                                inside the archive before upload
 ```
 
 ## Data, privacy, and backups

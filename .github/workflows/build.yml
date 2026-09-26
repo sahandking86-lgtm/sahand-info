@@ -31,34 +31,29 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
 
-      # Cheap regression net: the app icon is the easiest thing to lose silently (it needs the
-      # Info.plist keys actool injects). Hard-fails if the executable is missing; reports the
-      # rest into the run summary so a "why is there no icon" question has an instant answer.
+      # Both checks below call scripts/check-bundle.py - the same assertions, on the build
+      # directory and then again on the bundle as it sits inside the shipped archive. That script
+      # parses the Mach-O header itself, so it needs no plutil/otool/sips and behaves identically
+      # on a runner and on a laptop.
       - name: Verify app bundle
         run: |
           app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
-          test -n "$app" || { echo "no .app produced"; exit 1; }
-          echo "bundle: $app"
-          exec_name=$(plutil -extract CFBundleExecutable raw "$app/Info.plist")
-          test -f "$app/$exec_name"
+          test -n "$app" || { echo "::error::no .app produced by xcodebuild"; exit 1; }
+          report=$(python3 scripts/check-bundle.py -v "$app" 2>&1) || {
+            echo "::error::$(printf '%s' "$report" | tr '\n' ' ')"; exit 1; }
           {
             echo "## App bundle"
-            echo "- executable: \`$exec_name\`"
-            # Key presence read from the plist, not "plutil -extract": an empty dict such as
-            # UILaunchScreen is not extractable and would be reported as missing.
-            for k in UILaunchScreen CFBundleIcons CFBundleDisplayName; do
-              has=$(plutil -convert json -o - "$app/Info.plist" 2>/dev/null | python3 -c 'import json,sys; print("present" if sys.argv[1] in json.load(sys.stdin) else "MISSING")' "$k")
-              echo "- $k: $has"
-            done
+            echo '```'
+            echo "$report"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          tail -n 6 "$GITHUB_STEP_SUMMARY"
 
       - name: Package IPA
         run: |
           rm -rf Payload SahandInfo.ipa
           mkdir -p Payload
           app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
-          test -n "$app" || { echo "no .app produced"; exit 1; }
+          test -n "$app" || { echo "no .app produced" >&2; exit 1; }
           cp -R "$app" Payload/
           # -r with no -y/-9: byte-for-byte the same invocation main uses, so packaging is
           # never a variable when comparing a working main IPA against a branch IPA.
@@ -66,33 +61,27 @@ jobs:
           rm -rf Payload
           ls -lh SahandInfo.ipa
 
-      # Assert against the shipped archive rather than the build dir: this is literally what a
-      # container launcher does (find the .app, read CFBundleExecutable, exec that file). A green
-      # run therefore proves the .ipa is launchable-shaped, so any remaining failure is on-device
-      # (stale container entry, truncated transfer, iCloud placeholder) and not the package.
+      # The package is what a container launcher actually sees, so validate the copy that went
+      # through zip + unzip rather than the one still in DerivedData. A green run therefore proves
+      # the .ipa is launchable-shaped, and any remaining failure is on-device state (a stale
+      # container entry, a truncated transfer) rather than something this workflow produced.
       - name: Validate packaged IPA
         run: |
           rm -rf "$RUNNER_TEMP/check" && mkdir -p "$RUNNER_TEMP/check"
           unzip -q SahandInfo.ipa -d "$RUNNER_TEMP/check"
           app=$(find "$RUNNER_TEMP/check/Payload" -maxdepth 1 -name "*.app" -type d | head -n 1)
-          test -n "$app" || { echo "::error::no .app inside Payload/ — installers see Unknown.app"; exit 1; }
-          exec_name=$(plutil -extract CFBundleExecutable raw "$app/Info.plist")
-          test -f "$app/$exec_name" || { echo "::error::$app is missing its executable '$exec_name'"; exit 1; }
-          file "$app/$exec_name" | grep -q "Mach-O" || { echo "::error::$exec_name is not a Mach-O binary"; exit 1; }
-          car=$([ -f "$app/Assets.car" ] && echo yes || echo no)
-          priv=$([ -f "$app/PrivacyInfo.xcprivacy" ] && echo yes || echo no)
-          prov=$([ -f "$app/embedded.mobileprovision" ] && echo yes || echo no)
-          keys=$(plutil -p "$app/Info.plist" | grep -c '":')
-          plist_line=$(plutil -convert json -o - "$app/Info.plist" 2>/dev/null | tr -d '{}"' | tr ',' ' ' | tr -s ' ')
-          exec_line=$(otool -l "$app/$exec_name" 2>/dev/null | grep -A4 -m1 LC_BUILD_VERSION | tr -s ' \n' ' ')
-          echo "::warning::[sahand-info] bundle=$(basename "$app") exec=$exec_name size=$(du -sh "$app" | cut -f1) Assets.car=$car privacy=$priv provisioned=$prov plist_keys=$keys"
-          echo "::warning::[sahand-info] plist: $plist_line"
-          echo "::warning::[sahand-info] macho: ${exec_line:-unavailable}"
+          test -n "$app" || { echo "::error::no .app inside Payload/ - installers see Unknown.app"; exit 1; }
+          report=$(python3 scripts/check-bundle.py -v "$app" 2>&1) || {
+            echo "::error::the bundle inside SahandInfo.ipa is not launchable: $(printf '%s' "$report" | tr '\n' ' ')"
+            exit 1; }
+          # Annotations, not just logs: they are served by api.github.com, which stays readable
+          # from a dev sandbox while Actions log text often is not.
+          while IFS= read -r line; do echo "::warning::[sahand-info] $line"; done <<< "$report"
           {
-            echo "### Packaged app"
-            echo "- bundle: \`$(basename "$app")\`"
-            echo "- CFBundleExecutable: \`$exec_name\` (present, Mach-O)"
-            echo "- bundle size: $(du -sh "$app" | cut -f1)"
+            echo "### Packaged app, as it sits inside SahandInfo.ipa"
+            echo '```'
+            echo "$report"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload IPA
