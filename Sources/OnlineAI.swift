@@ -16,7 +16,7 @@ enum AIFailure: Equatable {
     case noKey
     case keyLooksWrong(String)
     case rejected(IntegerValue)          // 401 / 403
-    case badRequest(IntegerValue)        // 400
+    case badRequest(IntegerValue, String?)  // 400, plus whatever Google said why
     case modelUnavailable(String)        // 404
     case rateLimited
     case serverBusy
@@ -34,8 +34,9 @@ enum AIFailure: Equatable {
             return "Your API key doesn't look usable — \(why). Open Settings → AI Assistant, paste the whole key again and tap Test."
         case .rejected:
             return "Google rejected that key (401/403). It may be expired, or not the key from aistudio.google.com/apikey. Check it in Settings and tap Test."
-        case .badRequest:
-            return "Google didn't accept the request (400). That usually means the key belongs to a project with the Generative Language API switched off."
+        case .badRequest(_, let detail):
+            let why = detail ?? "That usually means the key belongs to a project with the Generative Language API switched off."
+            return "Google didn't accept the request (400). \(why)"
         case .modelUnavailable(let model):
             return "The model \"\(model)\" isn't available to your key, so there's nothing to ask. Try a key from aistudio.google.com/apikey on a Google AI Studio project."
         case .rateLimited:
@@ -187,7 +188,7 @@ enum OnlineAI {
     // MARK: - Shared request
 
     private static func sendRequest(body: [String: Any], apiKey: String, attempts: Int = 3) async -> AIOutcome {
-        guard let url = endpoint else { return .failure(.badRequest(0)) }
+        guard let url = endpoint else { return .failure(.badRequest(0, nil)) }
 
         var lastFailure: AIFailure = .offline
         for attempt in 1...max(1, attempts) {
@@ -248,13 +249,16 @@ enum OnlineAI {
     private static func classify(status: Int, data: Data) -> AIFailure {
         switch status {
         case 401, 403: return .rejected(IntegerValue(value: status))
-        case 400: return .badRequest(IntegerValue(value: status))
+        case 400: return .badRequest(IntegerValue(value: status), APIError.readMessage(data: data))
         case 404: return .modelUnavailable(modelName)
         case 429: return .rateLimited
         case 500...599: return .serverBusy
         default:
-            // The API says which field or limit it disliked; that is far more useful than a number.
-            if let message = APIError.readMessage(data: data) { return .badRequest(IntegerValue(value: status)) }
+            // The API says which field or limit it disliked; that is far more useful than a bare
+            // status code, so it is carried into the message rather than dropped.
+            if let message = APIError.readMessage(data: data) {
+                return .badRequest(IntegerValue(value: status), message)
+            }
             return .badResponse
         }
     }

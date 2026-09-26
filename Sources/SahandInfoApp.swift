@@ -969,16 +969,6 @@ extension QuestionAnswerer {
         let imperativeish = hits + words.filter { englishCommands.contains($0) }.count
         return hits >= 2 || imperativeish >= 4
     }
-
-    /// "yes" / "no" answers to a pending change are handled before the model is asked anything, so a
-    /// confirmation cannot be lost just because the user answered in words.
-    static func isBareConfirmation(_ text: String) -> Bool {
-        AppCoordinator.isAffirmative(text)
-    }
-
-    static func isBareRefusal(_ text: String) -> Bool {
-        AppCoordinator.isNegative(text)
-    }
 }
 
 // MARK: - Notes list
@@ -1207,7 +1197,7 @@ struct NoteRowView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(note.isReminderCompleted ? "Reminder done, tap to open it again"
-                                                                 : "Reminder \(rowDateFormatter.string(from: reminder)), tap to mark done")
+                                                                 : "Reminder \(relativeDateFormatter.localizedString(for: reminder, relativeTo: Date())), tap to mark done")
                 }
             }
 
@@ -1331,8 +1321,7 @@ struct NoteDetailView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         // A value found in the title used to highlight nothing at all, because only
                         // the body was searched. The title gets the same marker now.
-                        Text(titleWithHighlightIfNeeded(note: note))
-                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                        titleWithHighlightIfNeeded(note: note)
                             .fixedSize(horizontal: false, vertical: true)
 
                         if !note.categoryEnglish.isEmpty {
@@ -1401,17 +1390,20 @@ struct NoteDetailView: View {
         return note?.isReminderCompleted == true ? prefix + " · done" : prefix
     }
 
-    private func titleWithHighlightIfNeeded(note: Note) -> Text {
-        guard let highlight, !highlight.isEmpty else { return Text(note.title.isEmpty ? "Untitled" : note.title) }
-        let title = note.title
-        if title.range(of: highlight, options: [.caseInsensitive]) != nil {
-            return Text(title)
-                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+    @ViewBuilder
+    private func titleWithHighlightIfNeeded(note: Note) -> some View {
+        let title = note.title.isEmpty ? "Untitled" : note.title
+        let base = Text(title)
+            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+        if let highlight, !highlight.isEmpty, title.range(of: highlight, options: [.caseInsensitive]) != nil {
+            base
                 .padding(4)
                 .background(highlightColor.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
                 .foregroundStyle(.primary)
+        } else {
+            base
+                .foregroundStyle(.primary)
         }
-        return Text(title.isEmpty ? "Untitled" : title)
     }
 
     private func highlightedBody(in note: Note) -> AttributedString {
@@ -1926,7 +1918,7 @@ struct AskView: View {
             if settings.answerMode == .jumpAndHighlight {
                 // Jump & Highlight is the offline mode; it no longer swallows requests that want
                 // something done, but the difference is worth stating once, plainly.
-                Label("Jump & Highlight mode: answers come from your own notes, offline. Changes still ask for your key.",)
+                Label("Jump & Highlight mode: answers come from your own notes, offline. Changes still ask for your key.", systemImage: "wifi.slash")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -2501,7 +2493,9 @@ struct AskView: View {
                                                                                     opened: opened,
                                                                                     failed: result.isFailure)))
             }
-            if let confirmation { conversationHistory.append(ConversationTurn(role: "model", text: confirmation.detail)) }
+            if let pending = result.confirmation {
+                conversationHistory.append(ConversationTurn(role: "model", text: pending.question))
+            }
 
             // The outcome, not just the sentence: this is what stops the assistant claiming a note
             // does not exist one turn after creating it.
@@ -2623,7 +2617,7 @@ struct SettingsView: View {
     @EnvironmentObject private var reminders: ReminderScheduler
     @Environment(\.dismiss) private var dismiss
 
-    private enum KeyTest {
+    private enum KeyTest: Equatable {
         case idle, testing, ok, failed(String)
     }
 
@@ -3274,7 +3268,7 @@ struct DateView: View {
         let calendar = Calendar.current
         if date < Date() { return .overdue }
         if calendar.isDateInToday(date) { return .today }
-        if let days = try? calendar.dateComponents([.day], from: Date(), to: date).day, days <= 3 { return .soon }
+        if let days = calendar.dateComponents([.day], from: Date(), to: date).day, days <= 3 { return .soon }
         return .later
     }
 
@@ -3531,7 +3525,7 @@ struct DateView: View {
         tickClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_100_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.snappy) { recentlyTicked.remove(note.id) }
+            withAnimation(.snappy) { _ = recentlyTicked.remove(note.id) }
         }
     }
 

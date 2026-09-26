@@ -218,10 +218,13 @@ final class AppCoordinator: ObservableObject {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
         guard !words.isEmpty, words.count <= 4 else { return false }
-        let no: Set<String> = ["no", "dont", "do", "not", "keep", "it", "cancel", "nevermind",
-                               "nope", "stop", "n"]
-        return words.contains("no") || words.contains("nope") || words.contains("cancel")
-            || words.contains("keep") || words.contains("n")
+        // Short on purpose: a sentence that merely contains "no" ("no, wait, make it Friday") is a
+        // new request, not a refusal.
+        let no: Set<String> = ["no", "nope", "dont", "dontdoit", "cancel", "keep", "keepit",
+                               "nevermind", "stop", "n"]
+        let allowed: Set<String> = no.union(["it", "that", "please", "do", "doit"])
+        guard Set(words).isSubset(of: allowed) else { return false }
+        return words.contains { no.contains($0) }
     }
 }
 

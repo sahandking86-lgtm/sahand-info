@@ -40,11 +40,10 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!-- iPhone only, matching TARGETED_DEVICE_FAMILY: 1 in project.yml. -->
-	<key>UIDeviceFamily</key>
-	<array>
-		<integer>1</integer>
-	</array>
-	<!-- Deliberately absent. This file used to pin "armv7", a 32-bit requirement that no iPhone
+	<!-- DEVICE SUPPORT comes from TARGETED_DEVICE_FAMILY ("1" = iPhone) in project.yml; actool
+	 used to warn that a UIDeviceFamily key here gets overwritten, so it is not duplicated.
+
+	 Deliberately absent. This file used to pin "armv7", a 32-bit requirement that no iPhone
 	     since the 5s satisfies, and pinning "arm64" here would add a gate that buys nothing. Left
 	     out, Xcode injects UIRequiredDeviceCapabilities = [arm64] into the built plist by itself
 	     (confirmed against the artifact in CI), which is the correct value for the deployment
