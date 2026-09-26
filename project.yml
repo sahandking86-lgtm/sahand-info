@@ -29,7 +29,12 @@ targets:
     # (XcodeGen also then skips copying Info.plist into the app bundle's resources).
     settings:
       base:
-        PRODUCT_NAME: "Sahand Info"
+        # Deliberately no space. The bundle and executable become "SahandInfo.app" /
+        # "SahandInfo"; a space in the *payload* name breaks container installers
+        # (LiveContainer falls back to "Unknown.app" and a null executable path) as well as
+        # plenty of shell scripting around codesign/unzip. The home-screen label is unaffected
+        # because Sources/Info.plist sets CFBundleDisplayName to "Sahand Info".
+        PRODUCT_NAME: "SahandInfo"
         PRODUCT_BUNDLE_IDENTIFIER: com.sahandinfo.app
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"

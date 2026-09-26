@@ -36,7 +36,9 @@ jobs:
       # rest into the run summary so a "why is there no icon" question has an instant answer.
       - name: Verify app bundle
         run: |
-          app="build/Build/Products/Release-iphoneos/Sahand Info.app"
+          app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "no .app produced"; exit 1; }
+          echo "bundle: $app"
           exec_name=$(plutil -extract CFBundleExecutable raw "$app/Info.plist")
           test -f "$app/$exec_name"
           {
@@ -51,7 +53,9 @@ jobs:
         run: |
           rm -rf Payload SahandInfo.ipa
           mkdir -p Payload
-          cp -r "build/Build/Products/Release-iphoneos/Sahand Info.app" Payload/
+          app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "no .app produced"; exit 1; }
+          cp -R "$app" Payload/
           zip -qry SahandInfo.ipa Payload
           rm -rf Payload
           ls -lh SahandInfo.ipa

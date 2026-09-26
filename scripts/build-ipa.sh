@@ -16,7 +16,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BUILD_DIR="${BUILD_DIR:-build}"
-APP_NAME="Sahand Info"          # PRODUCT_NAME from project.yml — the .app keeps this name
+APP_NAME="SahandInfo"          # PRODUCT_NAME from project.yml — no space, on purpose
 SCHEME="${SCHEME:-SahandInfo}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 
@@ -38,7 +38,9 @@ xcodebuild -project "SahandInfo.xcodeproj" \
   build
 
 APP_PATH="$BUILD_DIR/Build/Products/${CONFIGURATION}-iphoneos/$APP_NAME.app"
-[[ -d "$APP_PATH" ]] || { echo "error: expected built app at $APP_PATH" >&2; exit 1; }
+[[ -d "$APP_PATH" ]] || APP_PATH="$(find "$BUILD_DIR/Build/Products/${CONFIGURATION}-iphoneos" -maxdepth 1 -name '*.app' -type d | head -n 1)"
+[[ -n "$APP_PATH" && -d "$APP_PATH" ]] || { echo "error: no .app produced under $BUILD_DIR/Build/Products/${CONFIGURATION}-iphoneos" >&2; exit 1; }
+echo "· bundle: $APP_PATH"
 
 echo "→ packaging SahandInfo.ipa"
 rm -rf Payload SahandInfo.ipa
