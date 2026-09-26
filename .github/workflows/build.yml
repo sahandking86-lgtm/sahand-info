@@ -62,6 +62,27 @@ jobs:
           rm -rf Payload
           ls -lh SahandInfo.ipa
 
+      # Assert against the shipped archive rather than the build dir: this is literally what a
+      # container launcher does (find the .app, read CFBundleExecutable, exec that file). A green
+      # run therefore proves the .ipa is launchable-shaped, so any remaining failure is on-device
+      # (stale container entry, truncated transfer, iCloud placeholder) and not the package.
+      - name: Validate packaged IPA
+        run: |
+          rm -rf "$RUNNER_TEMP/check" && mkdir -p "$RUNNER_TEMP/check"
+          unzip -q SahandInfo.ipa -d "$RUNNER_TEMP/check"
+          app=$(find "$RUNNER_TEMP/check/Payload" -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "::error::no .app inside Payload/ — installers see Unknown.app"; exit 1; }
+          exec_name=$(plutil -extract CFBundleExecutable raw "$app/Info.plist")
+          test -f "$app/$exec_name" || { echo "::error::$app is missing its executable '$exec_name'"; exit 1; }
+          file "$app/$exec_name" | grep -q "Mach-O" || { echo "::error::$exec_name is not a Mach-O binary"; exit 1; }
+          test -f "$app/Assets.car" || echo "warning: no compiled asset catalog (no app icon)"
+          {
+            echo "### Packaged app"
+            echo "- bundle: \`$(basename "$app")\`"
+            echo "- CFBundleExecutable: \`$exec_name\` (present, Mach-O)"
+            echo "- bundle size: $(du -sh "$app" | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
