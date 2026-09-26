@@ -42,12 +42,11 @@
 	<array>
 		<integer>1</integer>
 	</array>
-	<!-- arm64 — the old armv7 requirement makes current (64-bit-only) iPhones refuse
-	     to install the app. -->
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>arm64</string>
-	</array>
+	<!-- No UIRequiredDeviceCapabilities at all. This file used to declare "armv7", which makes
+	     current 64-bit-only iPhones refuse the install; "arm64" fixes that but still adds a
+	     capability gate for no benefit. Omitting the key means "no special hardware
+	     requirements", which is what this app wants - and it leaves nothing here differing from
+	     the old build by value, only by additions. -->
 	<!-- Without a launch screen iOS runs the app letterboxed in a compatibility
 	     layout, so this empty dict (system-background launch screen) matters. -->
 	<key>UILaunchScreen</key>
