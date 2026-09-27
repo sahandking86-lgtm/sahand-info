@@ -173,6 +173,10 @@ you might notice it.
   no-training rule is a clause in its services agreement, its inference requests are not retained by
   default, and Zero Data Retention is a toggle in its console — see
   [Why there is only one assistant](#why-there-is-only-one-assistant) for what that replaced.
+- **One thing is sent without being asked**, and it can be switched off: when you stop typing a note
+  that has no category, its title and text go out so a category can be suggested (Settings → AI
+  Assistant → *Suggest a category while I type*). Everything else leaves the phone only because you
+  asked a question or confirmed a change.
 - Before using this for sensitive notes, know too: the API key sits in plain `UserDefaults` (not the
   Keychain). Every note is listed to the model (titles, categories, reminder dates and dates) so counts
   and lookups stay honest, but only the notes your wording points at are sent with their full text —

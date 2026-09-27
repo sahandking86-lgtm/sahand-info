@@ -806,6 +806,13 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// The only request this app makes without being asked: when you stop typing a note that has no
+    /// category, one is suggested. Some people want that; someone keeping passwords in notes may not,
+    /// so it says plainly what goes out and gives the way to switch it off.
+    @Published var suggestCategories = true {
+        didSet { UserDefaults.standard.set(suggestCategories, forKey: suggestCategoriesStorageKey) }
+    }
+
     /// The model to ask for, as a setting rather than a constant, because a free tier moves models in
     /// and out of availability and "choose another one" has to be something you can do without waiting
     /// for a new build.
@@ -832,6 +839,7 @@ final class SettingsStore: ObservableObject {
     private let storageKey = "sahand_info_answer_mode_v1"
     private let apiKeyStorageKey = "sahand_info_groq_api_key_v1"
     private let modelStorageKey = "sahand_info_model_v1"
+    private let suggestCategoriesStorageKey = "sahand_info_suggest_categories_v1"
     /// Names from builds that spoke to other services. The first is only read long enough to be
     /// deleted; see init.
     private let legacyKeyStorageKeys = ["sahand_info_deepseek_api_key_v1"]
@@ -847,6 +855,9 @@ final class SettingsStore: ObservableObject {
             answerMode = .aiAnswer
         }
         apiKey = UserDefaults.standard.string(forKey: apiKeyStorageKey) ?? ""
+        if UserDefaults.standard.object(forKey: suggestCategoriesStorageKey) != nil {
+            suggestCategories = UserDefaults.standard.bool(forKey: suggestCategoriesStorageKey)
+        }
         let savedModel = UserDefaults.standard.string(forKey: modelStorageKey) ?? ""
         if !savedModel.isEmpty { model = savedModel }
         // An assistant that can no longer be chosen should not leave a credential behind. The old key
@@ -1784,7 +1795,7 @@ struct NoteDetailView: View {
     /// only when one is not already set and a key exists. Runs on the main actor: `notes` must not be
     /// touched from a background thread, which is how a list could end up not repainting.
     private func scheduleAutoCategorize() {
-        guard !settings.apiKey.isEmpty else { return }
+        guard settings.suggestCategories, !settings.apiKey.isEmpty else { return }
         autoCategorizeTask?.cancel()
 
         let titleSnapshot = draftTitle
@@ -3005,7 +3016,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Get a free key at \(Assistant.keyPage) and paste it below - no card, and nothing is sent anywhere until you type in the Ask tab.")
+                Text("Get a free key at \(Assistant.keyPage) and paste it below - no card.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3108,7 +3119,21 @@ struct SettingsView: View {
                 }
                 .font(.caption.weight(.semibold))
 
-                Text("Answers run through your own free \(Assistant.name) key (\(Assistant.keyPage)) over the internet - the notes themselves are what gets sent, and nothing about you is stored or collected by this app.")
+                // What goes out, stated once and truthfully. This sentence used to claim nothing is sent
+                // until you ask a question, which the category suggestion below quietly contradicted.
+                Toggle(isOn: suggestCategoriesBinding) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Suggest a category while I type")
+                            .font(.caption.weight(.semibold))
+                        Text("The only thing this app sends without being asked: a note you have stopped typing, so it can be filed. Questions in the Ask tab and the changes you confirm always go out - turning this off just closes the one automatic case.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(settings.theme.endColor)
+
+                Text("Answers run through your own free \(Assistant.name) key (\(Assistant.keyPage)) over the internet - the notes themselves are what gets sent, and nothing about you is stored, tracked or collected by this app.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3312,6 +3337,10 @@ struct SettingsView: View {
 
     private var modelBinding: Binding<String> {
         Binding(get: { settings.model }, set: { settings.model = $0 })
+    }
+
+    private var suggestCategoriesBinding: Binding<Bool> {
+        Binding(get: { settings.suggestCategories }, set: { settings.suggestCategories = $0 })
     }
 
     /// The current list, plus the stored choice if it is no longer on it. A model dropped from the
