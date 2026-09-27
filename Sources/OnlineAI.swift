@@ -143,10 +143,13 @@ enum AIProvider: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Listed best-first, so the default is the strongest thing each provider gives away.
+    /// The first entry is what an install that never chose gets. For Groq that is the strongest thing
+    /// on offer, since picking it is deliberate. For Gemini it is deliberately *not* the best one: this
+    /// app has always called flash-lite, and quietly moving someone with a working key onto a model
+    /// with tighter free-tier limits is a change they never asked for.
     var models: [String] {
         switch self {
-        case .gemini: return ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
+        case .gemini: return ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"]
         case .groq: return ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3-32b",
                             "meta-llama/llama-4-scout-17b-16e-instruct"]
         }
@@ -349,10 +352,17 @@ enum OnlineAI {
         if let problem = keyProblem(key) { return .keyLooksWrong(problem) }
         let namedModel = model ?? provider.defaultModel
         let contents: [[String: Any]] = [["role": "user", "parts": [["text": "Reply with the single word: ok"]]]]
+        // A reasoning model spends the budget on thinking before it speaks, so the five tokens that
+        // suffice for a one-word Gemini answer come back as an empty reply from gpt-oss and would be
+        // reported as a broken key.
+        let budget = provider.usesGoogleShape ? 5 : 128
         let body = requestBody(provider: provider, model: namedModel, contents: contents,
-                               system: nil, maxOutputTokens: 5)
+                               system: nil, maxOutputTokens: budget)
         switch await sendRequest(body: body, apiKey: key, provider: provider, model: namedModel, attempts: 1) {
         case .reply: return nil
+        // "It ran out of room" still proves the thing being tested: the key is accepted and there is
+        // quota left. Saying the key is broken because the model thought too long would be a lie.
+        case .failure(.cutOff): return nil
         case .failure(let failure): return failure
         }
     }
