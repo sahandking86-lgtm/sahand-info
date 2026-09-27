@@ -163,6 +163,15 @@ enum OnlineAI {
     /// refusal for another.
     static let lookupBudget = 5_000
 
+    /// How long one question may take from the moment it is asked before the app stops going back for
+    /// more. Without it the loop is worse than the single request it replaced on the *slow* path: the
+    /// opening request retries three times at 25 seconds each and every lookup twice more, so a
+    /// question on a bad connection could bounce the dots for four minutes. The Stop button is there,
+    /// but a wait that needs explaining is a wait that should not happen - so the budget ends the
+    /// conversation rather than the user ending it. It only gates lookups: the first request keeps all
+    /// its retries, because a setup that answers slowly must still be allowed to answer at all.
+    static let questionTimeBudget: TimeInterval = 45
+
     private static var session: URLSession = {
         let configuration = URLSessionConfiguration.default
         // 25s per attempt, twice: the old default (60s) times three retries could keep the "thinking"
@@ -227,6 +236,7 @@ enum OnlineAI {
         // notebook. Only `read_notes` is answered here; every other action goes back to the app to be
         // carried out or confirmed, exactly as before.
         var round = 0
+        let started = Date()
         while true {
             let body = requestBody(model: namedModel, messages: messages, system: prompt)
             // The first request gets the full retries; a follow-up that fails mid-conversation should
@@ -237,6 +247,12 @@ enum OnlineAI {
             let asked = AIProtocol.parse(raw)
             guard asked.action == "read_notes" else { return .reply(raw) }
             guard round < lookupRounds else { return .reply(raw) }
+            if Date().timeIntervalSince(started) > questionTimeBudget {
+                // Deliberately not the reply, which would render as "ask me once more" and invite the
+                // same slow exchange a second time. The timeout message already says what to do about
+                // it, and "nothing was changed" is true of a read.
+                return .failure(.timeout)
+            }
 
             emit("assistant", raw)
             var fetched = AIProtocol.lookupText(for: asked, in: relevantNotes, budget: lookupBudget)
