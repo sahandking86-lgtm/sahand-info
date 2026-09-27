@@ -3052,7 +3052,7 @@ struct SettingsView: View {
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
-                } else if let mismatch = OnlineAI.prefixProblem(settings.apiKey) {
+                } else if let mismatch = Assistant.prefixProblem(settings.apiKey) {
                     // A warning, not a wall: a key that works from a proxy stays usable.
                     Label("\(mismatch) — it will still be tried.", systemImage: "exclamationmark.triangle")
                         .font(.caption.weight(.semibold))
