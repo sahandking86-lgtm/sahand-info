@@ -151,7 +151,7 @@ enum AIProtocol {
                             includeCategoryTagging: Bool = false,
                             includeReminderTagging: Bool = false,
                             notesAreComplete: Bool = false,
-                            contextBudget: Int = 60_000,
+                            contextBudget: Int = 16_000,
                             relevantIDs: Set<UUID> = []) -> String {
         /// Chars of body each note may spend. Priority notes keep their text; the rest are indexed
         /// so the model can still find them by title and category.

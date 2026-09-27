@@ -16,9 +16,10 @@ note lists the titles and counts them before anything is removed.
 
 There is one AI assistant: **Groq**, called over WiFi from `Sources/OnlineAI.swift`, with your own
 free API key and no card. The default model is `openai/gpt-oss-120b`, a 117-billion-parameter
-reasoning model; `llama-3.3-70b-versatile`, `qwen/qwen3-32b` and
-`meta-llama/llama-4-scout-17b-16e-instruct` are selectable in Settings when a free tier moves models
-around. Why only one, and why not the one this app used first, is in
+reasoning model; `openai/gpt-oss-20b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` and
+`qwen/qwen3.8-27b` are selectable in Settings when a free tier moves models around. The list is copied
+from the provider's supported-models page rather than from memory: two names that were valid last week
+are no longer offered at all, and a dropped name would otherwise be a 404 nobody can explain. Why only one, and why not the one this app used first, is in
 [Why there is only one assistant](#why-there-is-only-one-assistant). Alongside the assistant,
 `QuestionAnswerer` in
 `Sources/SahandInfoApp.swift` is a dependency-free keyword/synonym/value matcher, used for
@@ -182,6 +183,10 @@ you might notice it.
 
 ## Known limitations
 
+- A question carries at most about 16,000 characters of note text, because the free tier counts 8,000
+  tokens *per minute* and a bigger request is refused no matter how long you wait — so notes that look
+  relevant to your wording are sent in full, the rest as a short excerpt, and the model is told that
+  happened rather than left to guess.
 - *AI Answer* needs a key and connectivity, and there is one provider: if Groq's free tier throttles
   you, waiting is the only lever (the model picker exists so a retired model name is not a dead end).
   Adding a second provider is now a small job — the transport is one path, and only the URL, the

@@ -38,15 +38,19 @@ enum Assistant {
         return "it does not start with \(keyPrefix), which is what a \(name) key looks like"
     }
 
-    /// Best first, because choosing an assistant here is a decision made once and then lived with.
-    /// gpt-oss-120b is a 117-billion-parameter reasoning model; the others are the fallbacks when
-    /// today's quota or a deprecation gets in the way, each of which the app reports rather than
-    /// silently swapping.
+    /// Best first. gpt-oss-120b is a 117-billion-parameter reasoning model; the rest are what to fall
+    /// back on when today's quota is spent or a name gets deprecated, and the app reports a bad name
+    /// rather than silently swapping one for another.
+    ///
+    /// Taken from the provider's supported-models page rather than from memory - two names that were
+    /// here a day ago (`qwen/qwen3-32b`, `meta-llama/llama-4-scout-17b-16e-instruct`) are no longer on
+    /// that list at all, and a model the service has dropped is a 404 the user has to be told about.
     static let models = [
         "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
         "llama-3.3-70b-versatile",
-        "qwen/qwen3-32b",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "llama-3.1-8b-instant",
+        "qwen/qwen3.8-27b",
     ]
 
     static var defaultModel: String { models[0] }
@@ -57,7 +61,7 @@ enum Assistant {
     /// paste a key is a data policy, not an endpoint.
     static let dataPolicy = "\(name) does not use what you send it or what comes back to train a model - that is a clause in its services agreement, not a page it can edit - and inference requests are not kept by default. The free plan is rate-limited, so a long notebook spends the token allowance before the request one."
 
-    static let rateLimitedHint = "\(name)'s free tier stopped that request - either 30 in one minute or today's allowance of about 1,000 requests and 200,000 tokens. The daily count resets at midnight UTC; ask again later, or shorten what you send."
+    static let rateLimitedHint = "\(name)'s free tier stopped that request: it allows 30 a minute, about 1,000 a day, and 8,000 tokens a minute - which is the one a long question trips. The daily count resets at midnight UTC; wait a minute and ask again, or ask about fewer notes at a time."
 
     static let badRequestHint = "That usually means the model name is not one \(name) offers your key, or the request was too large - try a smaller list of notes."
 }
@@ -137,9 +141,15 @@ enum AIOutcome {
 
 enum OnlineAI {
     /// Rough ceiling for the note text carried in one request. Past this, bodies are shortened and
-    /// the model is told they were - a confident "that isn't in your notes" from a truncated context
-    /// is worse than admitting it only saw part of them.
-    static let contextBudget = 60_000
+    /// the model is told they were - a confident "that isn't in your notes" from a truncated context is
+    /// worse than admitting it only saw part of them.
+    ///
+    /// The number is set by the provider's *per-minute* token limit, not by what the model can swallow:
+    /// the free tier allows 8,000 tokens a minute, a prompt of 60,000 characters is roughly 15,000
+    /// tokens (Kurdish in Arabic script costs more than that, not less), and such a request is refused
+    /// however long you wait between attempts. So the ceiling is sized to arrive comfortably under it -
+    /// about a third of a long novel of notes per question - rather than optimistically over a wall.
+    static let contextBudget = 16_000
 
     private static var session: URLSession = {
         let configuration = URLSessionConfiguration.default
