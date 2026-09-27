@@ -25,8 +25,8 @@ still useful with no connectivity.
 | Tab | What it does |
 | --- | --- |
 | **Notes** | Search, category chips, swipe to delete, `+` to add, gear for Settings. Rows show title, preview, category (English and Kurdish), and reminder date. Tapping the bell on a row ticks that reminder off; a long press offers Edit, the reminder, the category and delete. A new note stays visible while you type, so it can't be written out from under you. |
-| **Ask** | Chat-style Q&A over your notes. Answers arrive either as a written reply with tappable source chips (jump straight to the note, with the supporting line highlighted) or as a clean value you can copy — passwords, prices, phone numbers, dates. Prior turns are sent as context, so "make it 25 instead" works. It also *does* things: create, change, move, append, delete (one or many), file or clear a reminder, tick one off, set or clear a category, and find or open a note. Anything that changes or deletes a note waits for a **Confirm / Keep it** card you can answer by tapping or by typing "yes" / "no"; **Undo** stays available after the change, from any tab. A ✕ clears the conversation *and* its memory together, and **Stop** abandons a request in flight. |
-| **Date** | Everything with a reminder. Urgency comes from the date itself — overdue (with how late) → today → soon → later → done — not from a row's position in a list, so the colour and the label agree. Filter by status or date range, tick the circle to finish, swipe to delete, tap the row to open it. |
+| **Ask** | Chat-style Q&A over your notes. Answers arrive either as a written reply with tappable source chips (jump straight to the note, with the supporting line highlighted) or as a clean value you can copy — passwords, prices, phone numbers, dates. Prior turns are sent as context, so "make it 25 instead" works. It also *does* things: create, change, move, append, delete (one or many), file or clear a reminder, tick one off, set or clear a category, and find or open a note. Anything that changes or deletes a note waits for a **Confirm / Keep it** card you can answer by tapping or by typing "yes" / "no", and the message itself carries an **Undo** chip while that change is still the most recent one. A ✕ clears the conversation *and* its memory together, and **Stop** abandons a request in flight. |
+| **Date** | Everything with a reminder. Each one is coloured by *where it ranks* among what you are waiting on, not by an absolute number of days: the nearest few red, the next few amber, the rest green, with anything past its date red and marked overdue. Nine reminders is 3 / 3 / 3, seven is 3 / 2 / 2 — so one lonely reminder is not automatically a screen full of alarms. The same colours appear on the bell in the Notes list, and neither changes when a filter is switched. Filter by status or date range, tick the circle to finish, swipe to delete, tap the row to open it. |
 
 **Settings** (the gear in the Notes tab) covers answering style, the Gemini key (trailing
 whitespace is stripped on entry, and **Test key** tells you whether it is accepted before you
@@ -160,8 +160,10 @@ scripts/
 - **Notifications only arrive when the app is installed normally.** Installed as a *guest* inside
   LiveContainer, it shares another process, so iOS does not deliver its scheduled notifications —
   the reminder dates, list and undo all still work; only the alert is missing. Same for haptics.
-- The Undo bar only offers the *most recent* change, even though the store keeps up to 15 of them
-  for the assistant's own *Undo* action; nothing survives a relaunch, and there is no trash.
+- The bottom **Undo** banner appears only when notes actually went away — a banner for ticking a
+  reminder or saving what you typed was noise that taught people to dismiss it without reading. Every
+  change is still on the undo stack (up to 15 deep) and the chat keeps its own Undo chip; nothing
+  survives a relaunch, and there is no trash.
 - There is no multi-select in the Notes list: bulk deletes go through the assistant ("delete all
   my Work notes") or *Start Over* in Settings.
 - No unit tests yet; `AIProtocol.parse`, `AIActions` previews and `Note`'s back-compat decoder are

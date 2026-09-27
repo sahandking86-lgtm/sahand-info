@@ -551,7 +551,8 @@ enum AIActions {
             note.dateModified = Date()
             store.update(note, label: "Rewrote “\(title(of: note))”")
             coordinator.markChanged([id])
-            coordinator.say("Rewrote “\(title(of: note))”.", actionLabel: "Undo", undoes: true)
+            // No banner here: the rewrite is visible in the note, and the Undo chip under this very
+            // message is the way back. A popup for every small change is what made them ignorable.
             return "Rewrote “\(title(of: note))” — \(previousCount) characters became \(newBody.count). Undo puts the old text back."
         }
     }

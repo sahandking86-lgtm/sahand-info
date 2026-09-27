@@ -458,6 +458,59 @@ extension Note {
     }
 }
 
+/// How pressing a reminder is *compared with the others you are waiting on*. This is the meaning of
+/// the colours, in both the Notes list and the Date tab: the nearest few red, the next few amber, the
+/// rest green. Counting days instead would make one lonely reminder look calm - or frantic -
+/// regardless of what it is the only one of, and the colour would change when a filter was switched,
+/// which is why the tier is derived from the whole set once and shared.
+enum ReminderTier: Int, Hashable {
+    case overdue, urgent, comingUp, later, done
+
+    var color: Color {
+        switch self {
+        case .overdue: return Color(red: 1.00, green: 0.15, blue: 0.12)
+        case .urgent: return Color(red: 1.00, green: 0.30, blue: 0.24)
+        case .comingUp: return Color(red: 1.00, green: 0.72, blue: 0.05)
+        case .later: return Color(red: 0.20, green: 0.78, blue: 0.35)
+        case .done: return Color.secondary
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .overdue: return "overdue"
+        case .urgent: return "urgent"
+        case .comingUp: return "coming up"
+        case .later: return "later"
+        case .done: return "done"
+        }
+    }
+
+    /// Red for the nearest third of what is waiting (at most three), amber for about half of what is
+    /// left, green for the rest. Nine reminders is 3 / 3 / 3, seven is 3 / 2 / 2, two is 1 / 1.
+    static func tiers(of notes: [Note], now: Date = Date()) -> [UUID: ReminderTier] {
+        var result: [UUID: ReminderTier] = [:]
+        var waiting: [Note] = []
+        for note in notes {
+            guard let date = note.reminderDate else { continue }
+            if note.isReminderCompleted { result[note.id] = .done }
+            else if date < now { result[note.id] = .overdue }
+            else { waiting.append(note) }
+        }
+        waiting.sort { ($0.reminderDate ?? .distantFuture) < ($1.reminderDate ?? .distantFuture) }
+        let count = waiting.count
+        let redCount = min(3, (count + 2) / 3)
+        let remaining = max(0, count - redCount)
+        let amberCount = (remaining + 1) / 2
+        for (index, note) in waiting.enumerated() {
+            if index < redCount { result[note.id] = .urgent }
+            else if index < redCount + amberCount { result[note.id] = .comingUp }
+            else { result[note.id] = .later }
+        }
+        return result
+    }
+}
+
 // MARK: - Notes persistence
 
 /// Everything the app knows about your notes, and the only place they are written.
@@ -518,6 +571,10 @@ final class NotesStore: ObservableObject {
     // MARK: - Reads
 
     func note(id: UUID) -> Note? { notes.first(where: { $0.id == id }) }
+
+    /// The urgency colour every row should use, computed from all notes so the Notes tab and the Date
+    /// tab agree, and so switching a Date filter cannot repaint anything.
+    func reminderTiers() -> [UUID: ReminderTier] { ReminderTier.tiers(of: notes) }
     var canUndo: Bool { !undoStack.isEmpty }
 
     /// The Undo bar is an offer, not a hostage: putting it away must not destroy the snapshot.
@@ -569,14 +626,15 @@ final class NotesStore: ObservableObject {
         }
     }
 
-    func delete(ids: [UUID], label: String? = nil) {
+    func delete(ids: [UUID], label: String? = nil, offersUndo: Bool? = nil) {
         let targets = Set(ids)
         guard !targets.isEmpty else { return }
         let removed = notes.filter { targets.contains($0.id) }
         guard !removed.isEmpty else { return }
         mutate(label ?? (removed.count == 1
                          ? "Deleted \u{201c}\(displayName(of: removed[0]))\u{201d}"
-                         : "Deleted \(removed.count) notes")) { list in
+                         : "Deleted \(removed.count) notes"),
+               offersUndo: offersUndo) { list in
             list.filter { !targets.contains($0.id) }
         }
     }
@@ -613,18 +671,25 @@ final class NotesStore: ObservableObject {
         // back one step rather than bouncing between two states.
         notes = last.notes
         undoLabel = undoStack.last?.label
-        undoOfferVisible = undoLabel != nil
+        // Putting something back does not need an offer to undo the undo.
+        undoOfferVisible = false
         undoGeneration += 1
         return last.label
     }
 
-    private func mutate(_ label: String?, _ change: ([Note]) -> [Note]) {
-        let next = change(notes)
-        guard next != notes else { return }
-        undoStack.append((label ?? "Changed a note", notes))
+    private func mutate(_ label: String?, offersUndo: Bool? = nil, _ change: ([Note]) -> [Note]) {
+        let previous = notes
+        let next = change(previous)
+        guard next != previous else { return }
+        undoStack.append((label ?? "Changed a note", previous))
         if undoStack.count > undoDepth { undoStack.removeFirst() }
         undoLabel = label ?? "Changed a note"
-        undoOfferVisible = true
+        // The banner is for the one case where you cannot put it right yourself: notes that are gone.
+        // Ticking a reminder, saving what you typed, tagging, setting a date - all undoable by hand
+        // in seconds, and a popup for each of them was noise that taught people to swipe it away
+        // without reading, which is how a real "3 notes deleted, Undo?" gets missed.
+        // Every change still lands on the undo stack, so the chat's own Undo chip works as before.
+        undoOfferVisible = offersUndo ?? (next.count < previous.count)
         undoGeneration += 1
         notes = next
     }
@@ -1044,6 +1109,8 @@ struct NotesListView: View {
 
     private var availableCategories: [String] { notesStore.allCategories }
 
+    private var tiers: [UUID: ReminderTier] { notesStore.reminderTiers() }
+
     private var isFiltered: Bool {
         coordinator.categoryFilter != nil
             || !coordinator.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1140,7 +1207,7 @@ struct NotesListView: View {
                     // The row is a tap gesture, not a NavigationLink, and that is the whole reason the
                     // bell can be pressed: a Button nested inside a NavigationLink's label never gets
                     // its tap, which is why ticking a reminder from the Notes tab did nothing at all.
-                    NoteRowView(note: note) {
+                    NoteRowView(note: note, tier: tiers[note.id]) {
                         toggleReminder(on: note)
                     }
                     .contentShape(Rectangle())
@@ -1230,6 +1297,8 @@ struct NotesListView: View {
 struct NoteRowView: View {
     @EnvironmentObject var settings: SettingsStore
     let note: Note
+    /// The reminder's rank among everything the user is waiting on. Nil when the note has no date.
+    var tier: ReminderTier? = nil
     /// Ticking a reminder used to be decoration here - the bell could not be tapped, and the Date
     /// tab was the only place that could change it, while the Notes tab was the only place that
     /// could delete. Both tabs can now do both.
@@ -1259,6 +1328,9 @@ struct NoteRowView: View {
                         .padding(.vertical, 4)
                         .background(Capsule().fill(rowColor(for: reminder).opacity(0.13)))
                         .contentShape(Capsule())
+                        // The colour follows the reminder, not the tab you happen to be on, so it
+                        // settles into a shade instead of snapping when a tick changes the ranking.
+                        .animation(.snappy(duration: 0.35), value: tier)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(note.isReminderCompleted ? "Reminder done, tap to open it again"
@@ -1293,8 +1365,10 @@ struct NoteRowView: View {
     }
 
     private func rowColor(for reminder: Date) -> Color {
-        if note.isReminderCompleted { return .secondary }
-        return reminder < Date() ? Color(red: 1.0, green: 0.23, blue: 0.19) : settings.theme.endColor
+        // Same rule as the Date tab: overdue and the nearest few are red, the next ones amber, the
+        // rest green, and a finished reminder goes quiet. Only a note with no date keeps the theme.
+        if let tier { return tier.color }
+        return settings.theme.endColor
     }
 
     /// "in 2 days" / "3 days ago" in the list, so a reminder's date is visible where the note is -
@@ -1639,7 +1713,8 @@ struct NoteDetailView: View {
             // Backing out of a brand-new note must not leave a blank "Untitled" behind - but only of
             // one the + button just made. This used to fire for any note opened in edit mode, so an
             // existing note that happened to be empty was deleted underneath the user.
-            if route.isFresh { notesStore.delete(ids: [noteID], label: "Discarded the empty note") }
+            // Nothing was lost, so nothing is announced: this note never had any content.
+            if route.isFresh { notesStore.delete(ids: [noteID], label: "Discarded the empty note", offersUndo: false) }
             return
         }
         // Saving on the way out. Losing typed text because Back was pressed instead of Save is the
@@ -3368,40 +3443,15 @@ struct DateView: View {
         Array(Set(notesStore.notes.filter { $0.reminderDate != nil }.map { $0.categoryEnglish }.filter { !$0.isEmpty })).sorted()
     }
 
-    /// How far off a reminder is, decided by the date rather than by its place in the list. Position
-    /// meant a single reminder was always red and an overdue one, sorted last, looked calm.
-    private enum Urgency {
-        case done, overdue, today, soon, later
+    /// Colour and wording come from the ranking the Notes tab uses too (see `ReminderTier`), computed
+    /// over *every* reminder rather than the rows currently on screen. Two reasons: the outline means
+    /// the same thing on both tabs, and switching a filter here cannot repaint anything - the colours
+    /// used to follow whichever subset was visible, so a row turned red simply because you tapped
+    /// "Not done".
+    private var tiers: [UUID: ReminderTier] { notesStore.reminderTiers() }
 
-        var color: Color {
-            switch self {
-            case .done: return Color.secondary
-            case .overdue: return Color(red: 1.0, green: 0.23, blue: 0.19)
-            case .today: return Color(red: 1.0, green: 0.55, blue: 0.0)
-            case .soon: return Color(red: 1.0, green: 0.80, blue: 0.0)
-            case .later: return Color(red: 0.20, green: 0.78, blue: 0.35)
-            }
-        }
-
-        var label: String {
-            switch self {
-            case .done: return "done"
-            case .overdue: return "overdue"
-            case .today: return "today"
-            case .soon: return "soon"
-            case .later: return "later"
-            }
-        }
-    }
-
-    private func urgency(of note: Note) -> Urgency {
-        guard let date = note.reminderDate else { return .later }
-        if note.isReminderCompleted { return .done }
-        let calendar = Calendar.current
-        if date < Date() { return .overdue }
-        if calendar.isDateInToday(date) { return .today }
-        if let days = calendar.dateComponents([.day], from: Date(), to: date).day, days <= 3 { return .soon }
-        return .later
+    private func urgency(of note: Note) -> ReminderTier {
+        tiers[note.id] ?? (note.isReminderCompleted ? .done : .later)
     }
 
     private var withReminders: [Note] {
@@ -3645,6 +3695,9 @@ struct DateView: View {
         .flashWhenRecentlyChanged(note.id)
         .opacity(note.isReminderCompleted ? 0.75 : 1)
         .animation(.snappy(duration: 0.3), value: note.isReminderCompleted)
+        // The outline eases into its new colour when a reminder moves tier (finished, or something
+        // nearer came and went) instead of snapping.
+        .animation(.snappy(duration: 0.35), value: urgency(of: note))
     }
 
     private func toggleCompleted(_ note: Note) {
