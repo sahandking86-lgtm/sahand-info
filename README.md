@@ -178,9 +178,10 @@ you might notice it.
   Assistant → *Suggest a category while I type*). Everything else leaves the phone only because you
   asked a question or confirmed a change.
 - Before using this for sensitive notes, know too: the API key sits in plain `UserDefaults` (not the
-  Keychain). Every note is listed to the model (titles, categories, reminder dates and dates) so counts
-  and lookups stay honest, but only the notes your wording points at are sent with their full text —
-  the rest arrive as a short excerpt, and the model is told that happened. Keep secrets out of the notes
+  Keychain). Notes are listed to the model by title, category, reminder date and dates so counts and
+  lookups stay honest, but only the notes your wording points at are sent with much of their text — the
+  rest arrive as a short excerpt, and a very large collection is shortened for everyone rather than
+  refused. The model is told which of those happened. Keep secrets out of the notes
   you ask about, or use **Jump & Highlight**, which answers from the device with no request at all.
 - A change the assistant wants to make is sent as a *proposal*; nothing is written to
   your notes until you confirm, and the confirmation runs locally.
@@ -188,9 +189,13 @@ you might notice it.
 ## Known limitations
 
 - A question carries at most about 16,000 characters of note text, because the free tier counts 8,000
-  tokens *per minute* and a bigger request is refused no matter how long you wait — so notes that look
-  relevant to your wording are sent in full, the rest as a short excerpt, and the model is told that
-  happened rather than left to guess.
+  tokens *per minute* and a bigger request is refused no matter how long you wait. So the listing gives
+  things up in a chosen order: notes that look relevant to your wording are sent in full, the rest as a
+  short excerpt; too many for even that, and every note gets a slice sized from what is left; still too
+  many, and notes keep only a title and a category. If a collection is large enough that even those will
+  not fit, the last few notes are left out and the model is told it is seeing part of the collection —
+  never that it is seeing all of it, which is what would make it answer "that is not in your notes"
+  about something it was never shown. Counts and searches come from the device, not from the listing.
 - *AI Answer* needs a key and connectivity, and there is one provider: if Groq's free tier throttles
   you, waiting is the only lever (the model picker exists so a retired model name is not a dead end).
   Adding a second provider is now a small job — the transport is one path, and only the URL, the

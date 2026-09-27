@@ -53,7 +53,7 @@ targets:
         # which build you are holding. Updating under the same bundle id keeps your notes; only a
         # bundle *id* change loses the container's path, which is the trap documented above.
         MARKETING_VERSION: "2.3"
-        CURRENT_PROJECT_VERSION: "8"
+        CURRENT_PROJECT_VERSION: "9"
         SWIFT_VERSION: "5.0"
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
