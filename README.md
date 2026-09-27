@@ -33,8 +33,8 @@ still useful with no connectivity.
 | **Ask** | Chat-style Q&A over your notes. Answers arrive either as a written reply with tappable source chips (jump straight to the note, with the supporting line highlighted) or as a clean value you can copy — passwords, prices, phone numbers, dates. Prior turns are sent as context, so "make it 25 instead" works. It also *does* things: create, change, move, append, delete (one or many), file or clear a reminder, tick one off, set or clear a category, and find or open a note. Anything that changes or deletes a note waits for a **Confirm / Keep it** card you can answer by tapping or by typing "yes" / "no", and the message itself carries an **Undo** chip while that change is still the most recent one. A ✕ clears the conversation *and* its memory together, and **Stop** abandons a request in flight. |
 | **Date** | Everything with a reminder. Each one is coloured by *where it ranks* among what you are waiting on, not by an absolute number of days: the nearest third red, the next third amber, the rest green — nine reminders is 3 / 3 / 3, seven is 3 / 2 / 2, ten is 4 / 3 / 3, and with one or two the nearest simply is the urgent one. Past its date is always red and labelled overdue; finished is grey. The same colours sit on the bell in the Notes list, and no filter changes any of them. Filter by status or date range, tick the circle to finish, swipe to delete, tap the row to open it. |
 
-**Settings** (the gear in the Notes tab) covers answering style, the Gemini key (trailing
-whitespace is stripped on entry, and **Test key** tells you whether it is accepted before you
+**Settings** (the gear in the Notes tab) covers answering style, the Groq key and model
+(trailing whitespace is stripped on entry, and **Test key** tells you whether it is accepted before you
 need it), reminder notifications, a note-writing pattern the AI copies when it creates notes,
 ten gradient themes, export/import of all notes as one JSON file, and the version at the bottom.
 
@@ -209,7 +209,7 @@ you might notice it.
 | `xcodegen generate` errors with *"Source path ... doesn't exist"* | `Sources/` or `Resources/` is missing. `Resources/` must exist even when it holds nothing but the icon: `mkdir -p Resources`. |
 | *AI Answer* says to add a key | Settings → AI Assistant → paste a key from [console.groq.com/keys](https://console.groq.com/keys), then press **Test key** — it says which part of the problem is yours (key rejected, quota spent, model not offered) instead of blaming the network. |
 | Settings says the key looks saved, but every request fails | The key almost certainly has a space or newline in it. Trailing whitespace is stripped on entry now; re-paste it once and the warning goes away. |
-| "Google didn't accept the request (400)" | The response body is quoted in that message — it usually names the exact problem (bad key, wrong model name, project not enabled). |
+| "Groq didn't accept the request (400)" | The response body is quoted in that message — it usually names the exact problem (wrong model name for your key, request too large, malformed content). |
 | Answers look wrong after editing notes | Every note is listed but only the ones your wording matches are sent in full. If the answer is in a note the question didn't point at, quote a distinctive phrase from it, or open the note and ask from there. |
 | A reminder date passes with no notification | Either notifications are off (Settings → *Notifications allowed?* shows *No — open iOS Settings*), or the app is running as a LiveContainer guest, where iOS doesn't deliver a guest's notifications. |
 | The assistant changed or deleted something by mistake | Tap **Undo** in the bar at the bottom — it restores the whole collection as it was, from whichever tab you are in. |
