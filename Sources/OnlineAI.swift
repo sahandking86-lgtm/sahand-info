@@ -1,28 +1,72 @@
 //
 //  OnlineAI.swift
 //
-//  The call to whichever assistant is selected - Google's Gemini API or Groq's OpenAI-shaped one -
-//  and, more importantly, what gets said when it does not work.
+//  The only network call this app makes: asking the assistant, and - more importantly - what gets said
+//  when it does not work.
 //
-//  Every failure used to come back as one string: "Gemini isn't available right now - check your
-//  connection". A wrong key, no quota, airplane mode and a rejected request all looked identical,
-//  which sends you checking WiFi that is fine. Failures are named here, they are named *per provider*
-//  (telling someone to visit aistudio.google.com while Groq is selected is a dead end), and the ones
-//  a person can fix say what to fix. The key is trimmed and sanity-checked on the way out, since a
-//  space picked up while pasting used to look exactly like a network problem.
+//  Every failure used to come back as one string: "the model isn't available right now - check your
+//  connection". A wrong key, no quota, airplane mode and a rejected request all looked identical, which
+//  sends you checking WiFi that is fine. Failures are named here, and the ones a person can fix say
+//  what to fix. The key is also trimmed and sanity-checked on the way out, since a space picked up while
+//  pasting used to look exactly like a network problem.
 //
-//  Both providers are reached through the same three steps - fold the conversation into a legal turn
-//  order, wrap it in the shape that service expects, read the answer out of it - and neither the turn
-//  rules nor the error handling is duplicated for the second one.
+//  There is exactly one assistant now, and that is a privacy decision rather than a simplification.
+//  The provider this used to call stated, in its free-tier terms, that prompts and outputs may be used
+//  to improve its products and that reviewers may read API traffic - for a notebook that may contain a
+//  password, an unacceptable trade when a stronger model is free elsewhere with the opposite promise.
+//  So the other provider, its key field and its request shape were
+//  deleted outright: not hidden behind a setting someone could leave wrong, but gone, so no path
+//  remains that could send a note there. `Assistant` below is where the next one would be added, and
+//  the reason it is cheap is that nothing in here is provider-specific any more except the URL, the
+//  header and the two lines that read the answer out of the JSON.
 //
 
 import Foundation
+
+/// Everything that is true of the service behind this call. Kept in one place so the policy someone
+/// agreed to on their provider's website and the wording shown in Settings can never drift apart.
+enum Assistant {
+    static let name = "Groq"
+    static let keyPage = "console.groq.com/keys"
+    static let keyPrefix = "gsk_"
+
+    /// Only used to warn about a paste from the wrong website. Deliberately not enforced: blocking on a
+    /// prefix is how someone gets locked out of their own notebook when a provider changes its key
+    /// format, and the server rejects a wrong key in a heartbeat anyway.
+    static func prefixProblem(_ key: String) -> String? {
+        guard !key.isEmpty, !key.hasPrefix(keyPrefix) else { return nil }
+        return "it does not start with \(keyPrefix), which is what a \(name) key looks like"
+    }
+
+    /// Best first, because choosing an assistant here is a decision made once and then lived with.
+    /// gpt-oss-120b is a 117-billion-parameter reasoning model; the others are the fallbacks when
+    /// today's quota or a deprecation gets in the way, each of which the app reports rather than
+    /// silently swapping.
+    static let models = [
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+        "qwen/qwen3-32b",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+    ]
+
+    static var defaultModel: String { models[0] }
+
+    static var endpoint: URL? { URL(string: "https://api.groq.com/openai/v1/chat/completions") }
+
+    /// Said out loud next to the key field, because the thing a person is really accepting when they
+    /// paste a key is a data policy, not an endpoint.
+    static let dataPolicy = "\(name) does not use what you send it or what comes back to train a model - that is a clause in its services agreement, not a page it can edit - and inference requests are not kept by default. The free plan is rate-limited, so a long notebook spends the token allowance before the request one."
+
+    static let rateLimitedHint = "\(name)'s free tier stopped that request - either 30 in one minute or today's allowance of about 1,000 requests and 200,000 tokens. The daily count resets at midnight UTC; ask again later, or shorten what you send."
+
+    static let badRequestHint = "That usually means the model name is not one \(name) offers your key, or the request was too large - try a smaller list of notes."
+}
 
 enum AIFailure: Equatable {
     case noKey
     case keyLooksWrong(String)
     case rejected(IntegerValue)          // 401 / 403
-    case badRequest(IntegerValue, String?)  // 400, plus whatever Google said why
+    case badRequest(IntegerValue, String?)  // 400, plus whatever the service said why
     case modelUnavailable(String)        // 404
     case rateLimited
     case serverBusy
@@ -36,38 +80,35 @@ enum AIFailure: Equatable {
     case refusedByModel(String)
     case cutOff
 
-    /// Every string here used to name Google. With a second assistant to choose from, a message that
-    /// says "check aistudio.google.com" while Groq is selected sends people to the wrong website, so
-    /// the provider is passed in and the wording follows it.
-    func message(for provider: AIProvider) -> String {
+    var message: String {
         switch self {
         case .noKey:
-            return "Add your \(provider.shortName) API key in Settings first, then ask again."
+            return "Add your \(Assistant.name) API key in Settings first, then ask again."
         case .keyLooksWrong(let why):
             return "Your API key doesn't look usable — \(why). Open Settings → AI Assistant, paste the whole key again and tap Test."
         case .rejected:
-            return "\(provider.shortName) rejected that key (401/403). It may be expired, or not a key from \(provider.keyPage). Check it in Settings and tap Test."
+            return "\(Assistant.name) rejected that key (401/403). It may be expired, or not a key from \(Assistant.keyPage). Check it in Settings and tap Test."
         case .badRequest(_, let detail):
-            let why = detail ?? provider.badRequestHint
-            return "\(provider.shortName) didn't accept the request (400). \(why)"
+            let why = detail ?? Assistant.badRequestHint
+            return "\(Assistant.name) didn't accept the request (400). \(why)"
         case .modelUnavailable(let model):
-            return "The model \"\(model)\" isn't available to your key. Pick another one in Settings, or get a key from \(provider.keyPage)."
+            return "The model \"\(model)\" isn't available to your key. Pick another one in Settings, or get a key from \(Assistant.keyPage)."
         case .rateLimited:
-            return provider.rateLimitedHint
+            return Assistant.rateLimitedHint
         case .serverBusy:
-            return "\(provider.shortName) was busy (I retried). Ask again in a moment."
+            return "\(Assistant.name) was busy (I retried). Ask again in a moment."
         case .offline:
-            return "No internet connection — I retried and couldn't reach \(provider.shortName). Turn on Wi-Fi or mobile data and ask again."
+            return "No internet connection — I retried and couldn't reach \(Assistant.name). Turn on Wi-Fi or mobile data and ask again."
         case .timeout:
             return "That took too long and I stopped waiting, so nothing was changed. Ask again, or shorten what you're asking for."
         case .cancelled:
             return "Stopped."
         case .blockedBySecurity:
-            return "iOS blocked the request to \(provider.shortName) (App Transport Security). Nothing was changed."
+            return "iOS blocked the request to \(Assistant.name) (App Transport Security). Nothing was changed."
         case .badResponse:
-            return "\(provider.shortName) answered, but not in a form I could read. Nothing was changed."
+            return "\(Assistant.name) answered, but not in a form I could read. Nothing was changed."
         case .refusedByModel(let reason):
-            return "\(provider.shortName)'s safety filter refused that request (\(reason)), so there is no answer. Nothing was changed."
+            return "\(Assistant.name)'s safety filter refused that request (\(reason)), so there is no answer. Nothing was changed."
         case .cutOff:
             return "The answer ran out of room before it finished, so I didn't use a half-finished one. Ask for less at a time and I'll try again."
         }
@@ -94,114 +135,6 @@ enum AIOutcome {
     case failure(AIFailure)
 }
 
-/// Which brain answers, and where the key comes from. Two were chosen deliberately, not generically:
-/// a picker over a hundred models is a research project, while these two cover the real trade.
-///
-/// Google stays because it works today and needs no card. Groq is here for two reasons. The first is
-/// capability: the app had been talking to a *Flash-Lite* model, the smallest one in the family, while
-/// a 117-billion-parameter reasoning model is available free. The second is the one that matters for a
-/// notebook of passwords - Google's free tier states that prompts and outputs "may be used to improve
-/// Google products" and its terms allow human reviewers to read API input and output, whereas Groq's
-/// no-training promise is a clause in its Services Agreement (4.2), inference requests are not retained
-/// by default, and Zero Data Retention is a toggle any account can reach. Both tiers clear the twenty
-/// requests a day this app needs many times over; Groq's is about 1,000 requests and 200,000 tokens a
-/// day, and the token ceiling is the one that binds when whole notebooks are being sent.
-enum AIProvider: String, CaseIterable, Identifiable {
-    case gemini
-    case groq
-
-    var id: String { rawValue }
-
-    var shortName: String {
-        switch self {
-        case .gemini: return "Google"
-        case .groq: return "Groq"
-        }
-    }
-
-    var displayName: String {
-        switch self {
-        case .gemini: return "Gemini - Google AI Studio"
-        case .groq: return "Groq - gpt-oss 120B, Llama"
-        }
-    }
-
-    var keyPage: String {
-        switch self {
-        case .gemini: return "aistudio.google.com/apikey"
-        case .groq: return "console.groq.com/keys"
-        }
-    }
-
-    /// Only used to warn about a paste from the wrong website. Deliberately not enforced: blocking on a
-    /// prefix is how someone gets locked out of their own notebook when a provider changes its key
-    /// format, and the server rejects a wrong key in a heartbeat anyway.
-    var keyPrefix: String? {
-        switch self {
-        case .gemini: return "AIza"
-        case .groq: return "gsk_"
-        }
-    }
-
-    /// The first entry is what an install that never chose gets. For Groq that is the strongest thing
-    /// on offer, since picking it is deliberate. For Gemini it is deliberately *not* the best one: this
-    /// app has always called flash-lite, and quietly moving someone with a working key onto a model
-    /// with tighter free-tier limits is a change they never asked for.
-    var models: [String] {
-        switch self {
-        case .gemini: return ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"]
-        case .groq: return ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3-32b",
-                            "meta-llama/llama-4-scout-17b-16e-instruct"]
-        }
-    }
-
-    var defaultModel: String { models[0] }
-
-    /// Said out loud next to the key field, because "free" is not one policy and a person choosing
-    /// between these two is, in practice, choosing what happens to their text.
-    var dataPolicy: String {
-        switch self {
-        case .gemini:
-            return "On the free tier Google may use what you send it to improve its products, and its terms allow human reviewers to read API input and output. Turning on billing with the same key stops that. If a note holds a password, this is the tier to keep it off."
-        case .groq:
-            return "Groq's Services Agreement says it is not permitted to use what you send or receive to train a model, and inference requests are not retained by default - the promise is in the contract, not a page it can edit. A Zero Data Retention toggle in its console switches off even the troubleshooting logs."
-        }
-    }
-
-    var rateLimitedHint: String {
-        switch self {
-        case .gemini:
-            return "Google's free tier throttles this model and the retry did not get through. Wait half a minute and ask again."
-        case .groq:
-            return "Groq's free tier stopped that request - either 30 in one minute or today's allowance of about 1,000 requests and 200,000 tokens. The daily count resets at midnight UTC; ask again later, or shorten what you send."
-        }
-    }
-
-    var badRequestHint: String {
-        switch self {
-        case .gemini:
-            return "That usually means the key belongs to a project with the Generative Language API switched off."
-        case .groq:
-            return "That usually means the model name is not one Groq offers your key, or the request was too large - try a smaller list of notes."
-        }
-    }
-
-    /// Google's shape (contents/parts, a separate systemInstruction) versus the OpenAI-shaped body that
-    /// everyone else settled on (messages with a system turn, model named inside the JSON).
-    var usesGoogleShape: Bool { self == .gemini }
-
-    var keyFieldLabel: String { self == .gemini ? "Gemini API key" : "Groq API key" }
-
-    func endpoint(model: String) -> URL? {
-        switch self {
-        case .gemini:
-            return URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")
-        case .groq:
-            return URL(string: "https://api.groq.com/openai/v1/chat/completions")
-        }
-    }
-}
-
 enum OnlineAI {
     /// Rough ceiling for the note text carried in one request. Past this, bodies are shortened and
     /// the model is told they were - a confident "that isn't in your notes" from a truncated context
@@ -226,44 +159,43 @@ enum OnlineAI {
                        apiKey: String,
                        history: [ConversationTurn] = [],
                        notePattern: String = "",
-                       provider: AIProvider = .gemini,
                        model: String? = nil) async -> AIOutcome {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return .failure(.noKey) }
         if let problem = keyProblem(key) { return .failure(.keyLooksWrong(problem)) }
 
-        // Gemini rejects the whole request unless turns alternate user/model and start with "user".
-        // The app can legitimately end up with two model turns in a row (a declined confirmation, a
-        // card answered from the input bar), so the conversation is folded into a legal shape rather
-        // than sent as-is and answered with a 400 nobody can explain.
-        var contents: [[String: Any]] = []
+        // The conversation is folded into alternating user / assistant turns before it is sent. Two
+        // reasons, both learned the hard way: the app can legitimately end up with two assistant turns
+        // in a row (a declined confirmation, a card answered from the input bar), and an empty content
+        // field makes some servers answer with a 400 that has nothing useful in it. Merging adjacent
+        // turns of a kind keeps the transcript one the model reads as a conversation rather than as a
+        // list of fragments, and costs nothing.
+        var messages: [[String: Any]] = []
         var pendingUser: [String] = []
-        var pendingModel: [String] = []
+        var pendingAssistant: [String] = []
         func flush() {
             if !pendingUser.isEmpty {
-                contents.append(["role": "user", "parts": [["text": pendingUser.joined(separator: "\n")]]])
+                messages.append(["role": "user", "content": pendingUser.joined(separator: "\n")])
                 pendingUser = []
             }
-            if !pendingModel.isEmpty {
-                contents.append(["role": "model", "parts": [["text": pendingModel.joined(separator: "\n")]]])
-                pendingModel = []
+            if !pendingAssistant.isEmpty {
+                messages.append(["role": "assistant", "content": pendingAssistant.joined(separator: "\n")])
+                pendingAssistant = []
             }
         }
-        // A conversation must open with the user's turn, so leading model lines are skipped.
+        // A conversation should open with the questioner, so leading assistant lines are skipped.
         for turn in history.suffix(16).drop(while: { $0.role == "model" }) {
-            if turn.role == "model" { pendingModel.append(turn.text) } else { pendingUser.append(turn.text) }
-            if pendingUser.isEmpty != pendingModel.isEmpty { continue }
-            if !pendingUser.isEmpty, !pendingModel.isEmpty { flush() }
+            if turn.role == "model" { pendingAssistant.append(turn.text) } else { pendingUser.append(turn.text) }
+            if pendingUser.isEmpty == pendingAssistant.isEmpty { flush() }
         }
         flush()
-        // Whatever the history ended as, the message being asked now is the user's turn.
-        if let last = contents.last, (last["role"] as? String) == "user" {
-            // Fold the question into that turn instead of producing two user turns in a row.
-            if let parts = last["parts"] as? [[String: Any]], let text = parts.first?["text"] as? String {
-                contents[contents.count - 1] = ["role": "user", "parts": [["text": text + "\n" + question]]]
-            }
+        // Whatever the history ended as, the message being asked now is the user's turn - folded into
+        // the last one if that was already a user turn, so the two never sit side by side.
+        let trailing = messages.last?["role"] as? String
+        if trailing == "user", let existing = messages.last?["content"] as? String {
+            messages[messages.count - 1] = ["role": "user", "content": existing + "\n" + question]
         } else {
-            contents.append(["role": "user", "parts": [["text": question]]])
+            messages.append(["role": "user", "content": question])
         }
 
         let prompt = AIProtocol.systemPrompt(notes: relevantNotes,
@@ -275,40 +207,27 @@ enum OnlineAI {
                                              relevantIDs: Set(QuestionAnswerer.topMatchingNotes(for: question,
                                                                                                 in: relevantNotes,
                                                                                                 limit: 8).map { $0.id }))
-        let body = requestBody(provider: provider,
-                              model: model ?? provider.defaultModel,
-                              contents: contents,
+        let body = requestBody(model: model ?? Assistant.defaultModel,
+                              messages: messages,
                               system: prompt)
-        return await sendRequest(body: body, apiKey: key, provider: provider,
-                                model: model ?? provider.defaultModel)
+        return await sendRequest(body: body, apiKey: key, model: model ?? Assistant.defaultModel)
     }
 
-    /// One conversation, two shapes. The folding that makes the turn order legal is shared, so a
-    /// second provider cannot quietly have different conversation rules than the first; only the
-    /// envelope differs. For the OpenAI-shaped services the instructions become a leading `system`
-    /// turn and the model travels inside the body, while Gemini takes it in the URL and a separate
-    /// `systemInstruction` field.
-    private static func requestBody(provider: AIProvider,
-                                   model: String,
-                                   contents: [[String: Any]],
+    /// The instructions go in as a leading `system` turn, which is what every OpenAI-shaped service
+    /// expects; the model name travels inside the body rather than in the URL.
+    private static func requestBody(model: String,
+                                   messages: [[String: Any]],
                                    system: String?,
                                    maxOutputTokens: Int? = nil) -> [String: Any] {
-        if provider.usesGoogleShape {
-            var body: [String: Any] = ["contents": contents]
-            if let system { body["systemInstruction"] = ["parts": [["text": system]]] }
-            if let maxOutputTokens { body["generationConfig"] = ["maxOutputTokens": maxOutputTokens] }
-            return body
+        var turns: [[String: Any]] = []
+        if let system { turns.append(["role": "system", "content": system]) }
+        for turn in messages {
+            let text = (turn["content"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty, let role = turn["role"] as? String else { continue }
+            turns.append(["role": role, "content": text])
         }
-        var messages: [[String: Any]] = []
-        if let system { messages.append(["role": "system", "content": system]) }
-        for turn in contents {
-            let role = (turn["role"] as? String) == "model" ? "assistant" : "user"
-            let parts = turn["parts"] as? [[String: Any]] ?? []
-            let text = parts.compactMap { $0["text"] as? String }.joined()
-            guard !text.isEmpty else { continue }
-            messages.append(["role": role, "content": text])
-        }
-        var body: [String: Any] = ["model": model, "messages": messages]
+        var body: [String: Any] = ["model": model, "messages": turns]
         if let maxOutputTokens { body["max_tokens"] = maxOutputTokens }
         return body
     }
@@ -316,7 +235,7 @@ enum OnlineAI {
     /// A focused call that only suggests a bilingual category for a note being typed. Failures are
     /// silent by design - a missing tag should never interrupt writing - but the timeout is not.
     static func suggestCategory(title: String, body noteBody: String, apiKey: String,
-                               provider: AIProvider = .gemini, model: String? = nil) async -> (en: String, ku: String)? {
+                                model: String? = nil) async -> (en: String, ku: String)? {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, keyProblem(key) == nil else { return nil }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -332,33 +251,32 @@ enum OnlineAI {
         Note title: \(trimmedTitle.isEmpty ? "(untitled)" : trimmedTitle)
         Note body: \(trimmedBody.isEmpty ? "(empty)" : trimmedBody)
         """
-        let contents: [[String: Any]] = [["role": "user", "parts": [["text": prompt]]]]
-        let namedModel = model ?? provider.defaultModel
-        let body = requestBody(provider: provider, model: namedModel, contents: contents, system: nil)
-        guard case .reply(let text) = await sendRequest(body: body, apiKey: key, provider: provider,
-                                                         model: namedModel, attempts: 2) else { return nil }
+        let namedModel = model ?? Assistant.defaultModel
+        let body = requestBody(model: namedModel,
+                              messages: [["role": "user", "content": prompt]],
+                              system: nil)
+        guard case .reply(let text) = await sendRequest(body: body, apiKey: key, model: namedModel,
+                                                         attempts: 2) else { return nil }
         guard let object = AIProtocol.jsonObject(in: text),
               let categoryEnglish = object["category_en"] as? String,
               !categoryEnglish.isEmpty else { return nil }
         return (en: categoryEnglish, ku: (object["category_ku"] as? String) ?? "")
     }
 
-    /// Settings' "Test" button: a one-token request that answers the only question that matters -
-    /// is this key usable from this phone, right now?
-    static func verifyKey(_ rawKey: String, provider: AIProvider = .gemini,
-                          model: String? = nil) async -> AIFailure? {
+    /// Settings' "Test" button: a small request that answers the only question that matters - is this
+    /// key usable from this phone, right now?
+    static func verifyKey(_ rawKey: String, model: String? = nil) async -> AIFailure? {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return .noKey }
         if let problem = keyProblem(key) { return .keyLooksWrong(problem) }
-        let namedModel = model ?? provider.defaultModel
-        let contents: [[String: Any]] = [["role": "user", "parts": [["text": "Reply with the single word: ok"]]]]
-        // A reasoning model spends the budget on thinking before it speaks, so the five tokens that
-        // suffice for a one-word Gemini answer come back as an empty reply from gpt-oss and would be
-        // reported as a broken key.
-        let budget = provider.usesGoogleShape ? 5 : 128
-        let body = requestBody(provider: provider, model: namedModel, contents: contents,
-                               system: nil, maxOutputTokens: budget)
-        switch await sendRequest(body: body, apiKey: key, provider: provider, model: namedModel, attempts: 1) {
+        let namedModel = model ?? Assistant.defaultModel
+        // A reasoning model spends the budget on thinking before it speaks, so the handful of tokens
+        // that suffice for a one-word answer come back as an empty reply and would be reported as a
+        // broken key.
+        let body = requestBody(model: namedModel,
+                              messages: [["role": "user", "content": "Reply with the single word: ok"]],
+                              system: nil, maxOutputTokens: 128)
+        switch await sendRequest(body: body, apiKey: key, model: namedModel, attempts: 1) {
         case .reply: return nil
         // "It ran out of room" still proves the thing being tested: the key is accepted and there is
         // quota left. Saying the key is broken because the model thought too long would be a lie.
@@ -367,13 +285,8 @@ enum OnlineAI {
         }
     }
 
-    /// "That is not a Groq key" is worth saying *before* the request fails, but not worth failing
-    /// over - a provider changing its key format must not lock someone out of their own notebook.
-    static func prefixProblem(_ key: String, provider: AIProvider) -> String? {
-        guard !key.isEmpty, let prefix = provider.keyPrefix, !key.hasPrefix(prefix) else { return nil }
-        return "it does not start with \(prefix), which is what a \(provider.shortName) key looks like"
-    }
-
+    /// "That is not a key" is worth saying *before* the request fails, but not worth failing over - a
+    /// key that works from somewhere unexpected must stay usable.
     static func keyProblem(_ key: String) -> String? {
         if key.count < 20 { return "it is only \(key.count) characters long" }
         // Saving strips the ends; anything in the middle survives, and a pasted key with a line
@@ -383,13 +296,13 @@ enum OnlineAI {
         return nil
     }
 
-    // MARK: - Shared request
+    // MARK: - The request
 
-    private static func sendRequest(body: [String: Any], apiKey: String, provider: AIProvider,
-                                   model: String, attempts: Int = 3) async -> AIOutcome {
-        // No usable URL means the model name was not a URL fragment - the same "the request could not
-        // be built" outcome for either provider, phrased without blaming the network.
-        guard let url = provider.endpoint(model: model) else { return .failure(.badRequest(0, "the model name could not be turned into a URL")) }
+    private static func sendRequest(body: [String: Any], apiKey: String, model: String,
+                                   attempts: Int = 3) async -> AIOutcome {
+        // A missing URL is not a network problem, and saying so keeps "check your wifi" out of the
+        // one case where wifi was never the issue.
+        guard let url = Assistant.endpoint else { return .failure(.badRequest(0, "the request URL could not be built")) }
 
         var lastFailure: AIFailure = .offline
         for attempt in 1...max(1, attempts) {
@@ -398,13 +311,7 @@ enum OnlineAI {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // Google takes the key in a header of its own; the OpenAI-shaped services, Groq among them,
-            // take the usual bearer token.
-            if provider.usesGoogleShape {
-                request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-            } else {
-                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            }
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
             do {
@@ -418,28 +325,7 @@ enum OnlineAI {
                     guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .failure(.badResponse)
                     }
-                    if !provider.usesGoogleShape { return openAIReply(from: json) }
-                    // A refusal is not a malformed reply. Google says why (safety, or an empty
-                    // answer), and "I couldn't read that" sent people hunting for a formatting problem.
-                    if let reason = (json["promptFeedback"] as? [String: Any])?["blockReason"] as? String {
-                        return .failure(.refusedByModel(reason))
-                    }
-                    let candidates = json["candidates"] as? [[String: Any]] ?? []
-                    let finishReason = candidates.first?["finishReason"] as? String
-                    guard let content = candidates.first?["content"] as? [String: Any],
-                          let parts = content["parts"] as? [[String: Any]]
-                    else {
-                        return .failure(finishReason == "MAX_TOKENS" ? .cutOff : .badResponse)
-                    }
-                    let text = parts
-                        .filter { ($0["thought"] as? Bool) != true }
-                        .compactMap { $0["text"] as? String }
-                        .joined()
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else {
-                        return .failure(finishReason == "MAX_TOKENS" ? .cutOff : .badResponse)
-                    }
-                    return .reply(text)
+                    return reply(from: json)
                 }
 
                 let failure = classify(status: http.statusCode, data: data, model: model)
@@ -463,14 +349,14 @@ enum OnlineAI {
         return .failure(lastFailure)
     }
 
-    /// The OpenAI-shaped answer: the text sits in `choices[0].message.content`, and the same
-    /// "was it cut off" distinction the Google path makes - a half answer must never be applied to a
-    /// note, and must never be shown as if it were finished.
-    private static func openAIReply(from json: [String: Any]) -> AIOutcome {
+    /// The answer, and the one distinction that has to survive parsing: a reply that ran out of room is
+    /// not an answer. Half a rewrite applied to a note, or half a list of them shown as if finished,
+    /// is worse than saying it did not complete.
+    private static func reply(from json: [String: Any]) -> AIOutcome {
         let choice = (json["choices"] as? [[String: Any]])?.first
         let finishReason = choice?["finish_reason"] as? String
-        let content = choice?["message"] as? [String: Any]
-        let text = ((content?["content"] as? String) ?? "")
+        let message = choice?["message"] as? [String: Any]
+        let text = ((message?["content"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             return .failure(finishReason == "length" ? .cutOff : .badResponse)
@@ -507,7 +393,7 @@ enum OnlineAI {
     }
 }
 
-/// Small namespace so the error body Google returns is at least logged next to the message.
+/// Small namespace so the error body the service returns is at least read next to the message.
 enum APIError {
     static func readMessage(data: Data) -> String? {
         guard

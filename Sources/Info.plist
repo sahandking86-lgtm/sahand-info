@@ -29,7 +29,7 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Nothing talks to the network except the Gemini call over HTTPS, so no
+	<!-- Nothing talks to the network except the assistant call over HTTPS, so no
 	     arbitrary loads are allowed. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

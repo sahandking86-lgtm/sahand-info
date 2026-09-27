@@ -14,11 +14,12 @@ app builds itself (`AIActionPreview`), so a model that invents a note title gets
 that note" rather than an edit to whichever note happened to match loosely; a delete of more than one
 note lists the titles and counts them before anything is removed.
 
-There are two AI assistants to choose between in Settings, each with your own free API key, both
-called over WiFi from `Sources/OnlineAI.swift`: **Gemini** (Google AI Studio) and **Groq**
-(`openai/gpt-oss-120b` by default — a 117B reasoning model, and the reason it is offered is that it
-answers better than a *Flash-Lite* model while being free). Which one you pick also decides what
-happens to your text: see [Data, privacy, and backups](#data-privacy-and-backups). Alongside them,
+There is one AI assistant: **Groq**, called over WiFi from `Sources/OnlineAI.swift`, with your own
+free API key and no card. The default model is `openai/gpt-oss-120b`, a 117-billion-parameter
+reasoning model; `llama-3.3-70b-versatile`, `qwen/qwen3-32b` and
+`meta-llama/llama-4-scout-17b-16e-instruct` are selectable in Settings when a free tier moves models
+around. Why only one, and why not the one this app used first, is in
+[Why there is only one assistant](#why-there-is-only-one-assistant). Alongside the assistant,
 `QuestionAnswerer` in
 `Sources/SahandInfoApp.swift` is a dependency-free keyword/synonym/value matcher, used for
 **Jump & Highlight** mode: that mode needs no key and no network at all, so the app is
@@ -51,9 +52,8 @@ when it writes a note for you and, after a pause in typing, for notes you write 
   nothing to resolve or download at build time.
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
 - An iPhone or simulator on **iOS 17+**.
-- A free API key for one assistant: [Google AI Studio](https://aistudio.google.com/apikey) or
-  [Groq](https://console.groq.com/keys). Neither needs a card; both give far more than the
-  handful of requests a day this app makes.
+- A free [Groq API key](https://console.groq.com/keys) for the AI Answer mode — no credit card, and
+  far more requests a day than this app can make use of.
 
 ## Getting started
 
@@ -68,7 +68,7 @@ There is no `Podfile`/`Package.swift`: the Xcode project is generated from `proj
 re-run `xcodegen generate` after changing either.
 
 Without a key the app still works — notes, reminders, search and Jump & Highlight are all local —
-but *AI Answer* replies with "Add your Google (or Groq) API key in Settings first".
+but *AI Answer* replies with "Add your Groq API key in Settings first".
 
 ### Building an IPA
 
@@ -112,7 +112,7 @@ Sources/
   AppCoordinator.swift          Which tab is open, what is selected, pending confirmations, notices
   AIShared.swift                The prompt + JSON protocol the assistant speaks
   AIActions.swift               Applying a parsed action: previews, confirmations, real edits
-  OnlineAI.swift                provider choice, REST calls, retries, category suggestions
+  OnlineAI.swift                the assistant call, retries, error wording, category suggestions
   ReminderNotifications.swift   Local notifications for dated reminders
   Info.plist                    Hand-maintained, pointed at by INFOPLIST_FILE
 Resources/
@@ -129,13 +129,29 @@ scripts/
                                 inside the archive before upload
 ```
 
+### Why there is only one assistant
+
+The app used to talk to Google's free Gemini tier, and that path has been **deleted** — not hidden
+behind a setting, but removed: the request shape, the key field and the stored key itself are gone, so
+no code path in this build can send a note there. The reason is the free tier's own terms: prompts and
+outputs may be used to improve Google's products, and its terms allow human reviewers to read API input
+and output. A notebook is exactly the data you should not accept that for, and it costs nothing to
+choose differently — Groq's no-training rule is a clause in its services agreement, its inference
+requests are not retained by default, and Zero Data Retention is a toggle in its console. It is also
+the stronger model: the reasoning model now used by default scores well above a Flash-Lite class model
+on instruction-following and on doing an action correctly, which is precisely what this app asks of it.
+
+The one thing the old provider gave up: a much larger context window and better coverage of languages
+like Kurdish, since `gpt-oss` is English-strong. Auto-tagging a note with a Sorani category is the place
+you might notice it.
+
 ## Data, privacy, and backups
 
 - Notes live only on the device, in `UserDefaults` as JSON under `sahand_info_notes_v1`
-  (settings: `sahand_info_answer_mode_v1`, `sahand_info_deepseek_api_key_v1` — the Google key, under
-  the name it was first saved with, so existing installs keep working — plus
-  `sahand_info_groq_api_key_v1`, `sahand_info_provider_v1`, `sahand_info_gemini_model_v1`,
-  `sahand_info_groq_model_v1`, `sahand_info_note_pattern_v1`, `sahand_info_theme_v1`).
+  (settings: `sahand_info_answer_mode_v1`, `sahand_info_groq_api_key_v1`, `sahand_info_model_v1`,
+  `sahand_info_note_pattern_v1`, `sahand_info_theme_v1`). A key saved by an older build for the
+  provider that was removed is **deleted on first launch** — a credential for a service the app can no
+  longer reach is risk with no use, so it is not kept "just in case".
 - **Backups are yours to keep**: Settings → *Export All Notes* writes
   `SahandInfoNotes-YYYY-MM-DD.json` (a pretty-printed array of note objects) into the app's
   own `Application Support/Backups` — **not** the temporary directory, so the file is still there
@@ -151,25 +167,25 @@ scripts/
 - The only network call is the request to whichever assistant is selected, over HTTPS (no
   arbitrary loads allowed). Nothing is tracked or collected by the app itself — see
   `Resources/PrivacyInfo.xcprivacy`.
-- **The two providers do not treat your text the same way.** On Google's free tier their terms say
-  prompts and outputs may be used to improve Google products, and human reviewers may read API input
-  and output; enabling Cloud Billing on the same key ends that. Groq's no-training rule is clause 4.2
-  of its Services Agreement, inference requests are not retained by default, and Zero Data Retention
-  is a self-serve toggle in its console. If a note contains a password, that difference is the whole
-  reason to switch — the app itself sends the same prompt to either.
-- Before using this for sensitive notes, know too: the API key sits in plain `UserDefaults` (not
-  the Keychain), and *AI Answer* sends your notes as prompt context. Every note is listed
-  (titles, categories, reminder dates and dates) so counts and lookups stay honest, but only the
-  notes your wording points at are sent with their full text — the rest arrive as a short excerpt,
-  and the model is told that happened. Use a dedicated key with its own quota, keep secrets out of the notes you ask
-  about, or use **Jump & Highlight**, which answers from the device with no request at all.
-- A change the assistant wants to make is sent to Google as a *proposal*; nothing is written to
+- **What leaves the phone, and to whom.** *AI Answer* sends your notes as prompt context over HTTPS to
+  Groq and nowhere else; the app keeps no analytics, no account and no server of its own. Groq's
+  no-training rule is a clause in its services agreement, its inference requests are not retained by
+  default, and Zero Data Retention is a toggle in its console — see
+  [Why there is only one assistant](#why-there-is-only-one-assistant) for what that replaced.
+- Before using this for sensitive notes, know too: the API key sits in plain `UserDefaults` (not the
+  Keychain). Every note is listed to the model (titles, categories, reminder dates and dates) so counts
+  and lookups stay honest, but only the notes your wording points at are sent with their full text —
+  the rest arrive as a short excerpt, and the model is told that happened. Keep secrets out of the notes
+  you ask about, or use **Jump & Highlight**, which answers from the device with no request at all.
+- A change the assistant wants to make is sent as a *proposal*; nothing is written to
   your notes until you confirm, and the confirmation runs locally.
 
 ## Known limitations
 
-- *AI Answer* needs a key and connectivity. There are two providers, but no automatic failover:
-  if one is throttled you switch it yourself in Settings, and both keys can be kept at once. (The
+- *AI Answer* needs a key and connectivity, and there is one provider: if Groq's free tier throttles
+  you, waiting is the only lever (the model picker exists so a retired model name is not a dead end).
+  Adding a second provider is now a small job — the transport is one path, and only the URL, the
+  header and two lines of JSON parsing differ. (The
   on-device llama.cpp engine that used to be here is in git history:
   `git log --oneline -- Sources/LocalAI.swift`.)
 - **Notifications only arrive when the app is installed normally.** Installed as a *guest* inside
@@ -191,7 +207,7 @@ scripts/
 | Symptom | Fix |
 | --- | --- |
 | `xcodegen generate` errors with *"Source path ... doesn't exist"* | `Sources/` or `Resources/` is missing. `Resources/` must exist even when it holds nothing but the icon: `mkdir -p Resources`. |
-| *AI Answer* says to add a key | Settings → AI Assistant → pick the assistant, paste its key ([Google](https://aistudio.google.com/apikey) or [Groq](https://console.groq.com/keys)), then press **Test key** — it says which part of the problem is yours (key rejected, API not enabled, quota spent, model not offered) instead of blaming the network. |
+| *AI Answer* says to add a key | Settings → AI Assistant → paste a key from [console.groq.com/keys](https://console.groq.com/keys), then press **Test key** — it says which part of the problem is yours (key rejected, quota spent, model not offered) instead of blaming the network. |
 | Settings says the key looks saved, but every request fails | The key almost certainly has a space or newline in it. Trailing whitespace is stripped on entry now; re-paste it once and the warning goes away. |
 | "Google didn't accept the request (400)" | The response body is quoted in that message — it usually names the exact problem (bad key, wrong model name, project not enabled). |
 | Answers look wrong after editing notes | Every note is listed but only the ones your wording matches are sent in full. If the answer is in a note the question didn't point at, quote a distinctive phrase from it, or open the note and ask from there. |
