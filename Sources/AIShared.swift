@@ -49,6 +49,7 @@ enum AIProtocol {
     /// Settings screen both read this, so neither can drift from the other.
     static let capabilities: [(action: String, plainEnglish: String)] = [
         ("none", "answer a question from your notes"),
+        ("read_notes", "read the full text of any notes it needs before answering"),
         ("create_note", "add a new note, with a category and a reminder"),
         ("patch_note", "change one piece of text inside a note, leaving the rest alone"),
         ("append_to_note", "add a line to the end of a note"),
@@ -268,6 +269,30 @@ enum AIProtocol {
             ? "Here are ALL of the user's notes, every single one, with their categories, reminders and dates. Read every note before saying something is missing - do not skim, and do not assume. If the answer is anywhere in here, state it confidently."
             : "Notes that look relevant (there may be others):"
 
+        // What to do about a listing the model cannot fully read. Without this paragraph the honest
+        // answer to any question needing a body is a guess from a title, which is how the assistant
+        // came to look like it had forgotten its own notebook: the excerpt was the whole of what it was
+        // given, and nothing told it that more was reachable.
+        let readSection = """
+
+
+        This listing is an index, not the notebook. A note whose body is shortened or missing is still
+        there and still readable: answer with "action": "read_notes" and the app replies with the real
+        text, then you answer. Name the notes you want in "targets" (titles, or any words that identify
+        them) or a whole set in "content": all, overdue, upcoming, done, untagged, category:Name,
+        search:words. Ask for several notes in one call instead of one note at a time. Never state what a
+        note says from its title alone, and never say something is not in the notes because the listing
+        did not show it - read it first. The app grants a few lookups per question and tells you when it
+        will not grant another. search_notes and list_notes are different: those change what the user
+        sees on screen, so use them only when the user asked to see or count something.
+
+        If the user asks you to go through everything - summarise the notebook, check every note for a
+        mistake, find all the ones about X - do not answer from the listing alone. Ask for content "all"
+        or the set named in the question, read what comes back, and ask again for the rest until you have
+        covered them; a few notes at a time is fine and expected. Say which ones you reached if you run
+        out of lookups.
+        """
+
         let patternSection: String
         if let notePattern, !notePattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             patternSection = "\n\nWhen creating a new note (create_note), follow this pattern the user prefers:\n\(notePattern)"
@@ -297,12 +322,14 @@ enum AIProtocol {
                                                         includeReminderTagging: includeReminderTagging)
 
         return """
-        You are the assistant inside a personal notes app on this phone. You can answer questions
-        about the notes below and you can change the app's state by asking for one of the actions
-        listed here — those actions are the whole of what you can do, so never offer anything else.
+        You are the assistant inside a personal notes app on this phone. You are not working from a
+        quotation: the notebook itself is behind the listing below, you can read any part of it, and you
+        can change it - through the actions listed here, which are the whole of what you can do, so
+        never offer anything else. Use them, including the reads, instead of guessing from a title or an
+        excerpt, and prefer looking something up over saying you cannot.
 
         \(notesHeader)
-        \(context.isEmpty ? "(no notes yet)" : context)\(patternSection)\(truncationNotice)
+        \(context.isEmpty ? "(no notes yet)" : context)\(readSection)\(patternSection)\(truncationNotice)
 
         Reply with ONLY one JSON object and nothing else - no prose, no markdown fences - in exactly
         this shape:
@@ -310,8 +337,10 @@ enum AIProtocol {
 
         "action" must be exactly one of: \(actionList).
 
-        - none — an answer to a question. Put it in "reply", using ONLY the notes above. If the notes
-          do not answer it, say that plainly; do not guess.
+        - none — an answer to a question. Put it in "reply", using ONLY the notes you have read. If
+          they do not answer it, read more of them, and only then say so plainly; do not guess.
+        - read_notes — text you were not given. "targets" and/or "content" as described above. The app
+          answers you with the note text and lets you ask again; nothing the user sees moves.
         - create_note — "title" and "content".
         - patch_note — change one piece of text inside a note. "target" finds the note, "find" is the
           words exactly as they appear in it, "replace" is what to write instead. PREFER THIS over
@@ -358,7 +387,7 @@ enum AIProtocol {
     }
 
     static func actionListForPrompt(includeCategoryTagging: Bool, includeReminderTagging: Bool) -> String {
-        var names = ["none", "create_note", "patch_note", "append_to_note", "update_note",
+        var names = ["none", "read_notes", "create_note", "patch_note", "append_to_note", "update_note",
                      "delete_note", "delete_notes", "search_notes", "filter_category", "list_notes",
                      "open_note", "edit_note", "switch_tab", "set_theme", "set_answer_mode",
                      "open_settings", "undo_last_change"]
@@ -437,6 +466,114 @@ enum AIProtocol {
         return found.last { object in object.keys.contains(where: { isAnswer.contains($0) }) } ?? found.last
     }
 
+    /// Answers a `read_notes` request out of a snapshot of the notes. Deliberately a plain function
+    /// over `[Note]` rather than part of `AIActions`: this exchange happens between the model and the
+    /// notebook, and nothing on screen moves because of it - no tab change, no search box, no filter.
+    /// The text is clipped to `budget` so that a lookup cannot become a way to smuggle an oversized
+    /// request through in three pieces, and it never returns an empty string: an empty turn would be
+    /// resent as a question with nothing new in it, which is a round wasted and an answer no better.
+    static func lookupText(for parsed: AIActionResponse, in notes: [Note], budget: Int) -> String {
+        func titleOf(_ note: Note) -> String { note.title.isEmpty ? "Untitled" : note.title }
+
+        guard !notes.isEmpty else {
+            return "You have no notes at all, so there is nothing to read. Say that, and offer to make one."
+        }
+
+        // Named notes first and in the order asked, so "the deposit one, then the rent one" reads the
+        // way the question was put.
+        var picked: [Note] = []
+        var misses: [String] = []
+        for raw in parsed.targets + [parsed.target ?? ""] {
+            let want = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !want.isEmpty else { continue }
+            if let match = QuestionAnswerer.bestMatchingNote(for: want, in: notes),
+               !picked.contains(where: { $0.id == match.id }) {
+                picked.append(match)
+            } else if !misses.contains(want) {
+                misses.append(want)
+            }
+        }
+
+        // A set, when the question was about a group rather than a note.
+        var scope = (parsed.content ?? parsed.scope ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Models put a verb in front of the name of a set half the time ("read all", "show overdue"),
+        // and left that way it reads as a description of a single note, so the words "read" and "notes"
+        // get matched against everything and the answer comes back about the wrong note.
+        for filler in ["read the notes: ", "read notes: ", "read ", "show ", "list ", "notes about ", "about "] {
+            if scope.hasPrefix(filler) { scope = String(scope.dropFirst(filler.count)); break }
+        }
+        scope = scope.trimmingCharacters(in: .whitespaces)
+        if picked.isEmpty, !scope.isEmpty {
+            let set: [Note]
+            switch scope {
+            case "all", "every", "everything", "notes", "all notes":
+                set = notes
+            case "overdue":
+                set = notes.filter { ($0.reminderDate ?? .distantFuture) < Date() && !$0.isReminderCompleted }
+            case "upcoming", "reminders":
+                set = notes.filter { $0.reminderDate != nil && !$0.isReminderCompleted }
+            case "done", "completed":
+                set = notes.filter { $0.isReminderCompleted }
+            case "untagged", "uncategorized":
+                set = notes.filter { $0.categoryEnglish.isEmpty }
+            default:
+                let name: (String) -> String = { String(scope.dropFirst($0.count)).trimmingCharacters(in: .whitespaces) }
+                if scope.hasPrefix("category:"), scope.count > 9 {
+                    let wanted = name("category:")
+                    set = notes.filter { $0.categoryEnglish.caseInsensitiveCompare(wanted) == .orderedSame }
+                } else if scope.hasPrefix("search:"), scope.count > 7 {
+                    let words = name("search:")
+                    set = notes.filter {
+                        $0.title.range(of: words, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                            || $0.body.range(of: words, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                    }
+                } else {
+                    // Anything else is a description of a note rather than a set, so it is treated as
+                    // one more way to point: the same matcher the mutating actions use, so "the note
+                    // about the landlord" finds the note here as reliably as it does for patch_note.
+                    set = QuestionAnswerer.topMatchingNotes(for: scope, in: notes, limit: 12)
+                }
+            }
+            for note in set where !picked.contains(where: { $0.id == note.id }) { picked.append(note) }
+        }
+
+        // A miss is answered with the titles, because "I couldn't find it" leaves the model to invent a
+        // name, while the list lets it pick the right one on the next round.
+        guard !picked.isEmpty else {
+            let what = misses.isEmpty ? "any note from that description" : misses.joined(separator: ", ")
+            let titles = notes.prefix(40).map { titleOf($0) }.joined(separator: ", ")
+            let tail = notes.count > 40 ? ", and \(notes.count - 40) more" : ""
+            return "Nothing matches \(what). Your notes are titled: \(titles)\(tail). Ask for one of those."
+        }
+
+        // Room is kept back for the sentence saying the rest did not fit, so the promise that a lookup
+        // stays inside its budget survives the very moment it has to be broken - otherwise the notice
+        // that reports the clipping is itself what pushes the request over.
+        let roomToSpare = min(max(0, budget - 160), 96)
+        var out = ""
+        var shown = 0
+        for note in picked {
+            let room = budget - roomToSpare - out.count
+            // The `out.isEmpty` test is what keeps a small budget from returning *nothing*: an empty
+            // answer turn is resent as a question with no new text in it, which wastes a round and
+            // teaches the model that reading the notes achieves nothing.
+            guard room > 160 || out.isEmpty else {
+                out += "\n\n(\(picked.count - shown) more notes were left out of this reply for size - ask again for them)"
+                break
+            }
+            let body = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let record = "\(titleOf(note)) [\(note.categoryEnglish.isEmpty ? "no category" : note.categoryEnglish)]: \(body.isEmpty ? "(no text in this note)" : body)"
+            // The marker is subtracted as well as added: a slice of exactly `room` characters plus the
+            // sentence saying it was cut is one sentence longer than the budget allowed.
+            let cutMark = "…(cut off by the size limit)"
+            if record.count > room { record = String(record.prefix(max(0, room - cutMark.count))) + cutMark }
+            out += (out.isEmpty ? "" : "\n\n") + record
+            shown += 1
+        }
+        return out
+    }
+
     /// Models invent names for things they have seen elsewhere. Mapping the obvious synonyms onto
     /// real actions is what turns "delete everything" into a working request instead of a shrug.
     static func normalize(action raw: String) -> String {
@@ -446,7 +583,8 @@ enum AIProtocol {
             .replacingOccurrences(of: "-", with: "_")
             .replacingOccurrences(of: " ", with: "_")
         switch action {
-        case "", "none", "answer", "respond", "reply", "read_notes": return "none"
+        case "", "none", "answer", "respond", "reply": return "none"
+        case "fetch_notes", "get_notes", "read_note", "read_all_notes", "load_notes": return "read_notes"
         case "add_note", "new_note", "create", "create_a_note": return "create_note"
         case "edit_note_text", "replace_in_note", "patch", "find_replace", "change_text": return "patch_note"
         case "add_line", "append", "add_to_note": return "append_to_note"

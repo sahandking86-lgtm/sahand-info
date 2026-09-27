@@ -173,6 +173,16 @@ you might notice it.
   no-training rule is a clause in its services agreement, its inference requests are not retained by
   default, and Zero Data Retention is a toggle in its console — see
   [Why there is only one assistant](#why-there-is-only-one-assistant) for what that replaced.
+- **It reads before it answers.** The listing that goes with a question is an index, not the notebook,
+  and the assistant knows it: when it needs text it was not given it asks for `read_notes`, the app
+  answers from the same snapshot of your notes (nothing on screen moves), and the question is put again
+  with that text attached. Up to three lookups per question, several notes in each one, so "go through
+  all of them" and "what does the deposit note actually say" are both answerable instead of guessed from
+  a title. It used to be limited to whatever a keyword match picked out, which is what made it sound as
+  though it had only read the newest few notes. Each lookup is another request, and the provider's
+  automatic prompt caching normally makes a repeated prefix stop counting against the per-minute limit —
+  but the cache is best-effort and not available on every model in the picker, so a long chain of lookups
+  can still be throttled, and the app then says so rather than answering from the part it had.
 - **One thing is sent without being asked**, and it can be switched off: when you stop typing a note
   that has no category, its title and text go out so a category can be suggested (Settings → AI
   Assistant → *Suggest a category while I type*). Everything else leaves the phone only because you
@@ -189,7 +199,8 @@ you might notice it.
 ## Known limitations
 
 - A question carries at most about 16,000 characters of note text, because the free tier counts 8,000
-  tokens *per minute* and a bigger request is refused no matter how long you wait. So the listing gives
+  tokens *per minute* and a bigger request is refused no matter how long you wait. Text beyond that is
+  fetched on request rather than lost (`read_notes`), and the listing itself gives
   things up in a chosen order: notes that look relevant to your wording are sent in full, the rest as a
   short excerpt; too many for even that, and every note gets a slice sized from what is left; still too
   many, and notes keep only a title and a category. If a collection is large enough that even those will

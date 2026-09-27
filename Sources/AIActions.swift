@@ -247,6 +247,17 @@ enum AIActions {
             result.outcomeForHistory = "[done] category of \"\(title(of: match))\" is now \"\(en.isEmpty ? "(none)" : en)\""
             return result
 
+        case "read_notes":
+            // Only reached when the model asked for more lookups than one question allows, because
+            // `OnlineAI` answers the earlier ones itself. Nothing here can be done in a single reply,
+            // so say what happened instead of refusing an action that genuinely exists.
+            result.reply = "That needs another read through your notes — ask me once more and I'll finish it."
+            // Not [waiting] - nothing is pending an answer from the user - and not [failed], which the
+            // transcript is written to mean "an error happened". The next question has to be able to tell
+            // that the last one simply did not finish.
+            result.outcomeForHistory = "[incomplete] it ran out of lookups while reading the notes and did not answer"
+            return result
+
         case "search_notes":
             let query = (parsed.target ?? parsed.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !query.isEmpty else {

@@ -151,6 +151,18 @@ enum OnlineAI {
     /// about a third of a long novel of notes per question - rather than optimistically over a wall.
     static let contextBudget = 16_000
 
+    /// How many times one question may ask for text it was not given. Each lookup is a second request,
+    /// and the free tier counts requests per minute as well as tokens, so this is a budget rather than
+    /// a limit on curiosity: three is enough to read the two notes a question names, then the one it
+    /// turned out to depend on. When they run out the model is told, and answers from what it has read.
+    static let lookupRounds = 3
+
+    /// What one lookup may carry. Smaller than the listing on purpose: the request that opens a
+    /// conversation already holds every title, so a lookup only has to add text, and keeping each one
+    /// well under the ceiling is what makes the whole exchange fit in a minute instead of trading one
+    /// refusal for another.
+    static let lookupBudget = 5_000
+
     private static var session: URLSession = {
         let configuration = URLSessionConfiguration.default
         // 25s per attempt, twice: the old default (60s) times three retries could keep the "thinking"
@@ -207,10 +219,33 @@ enum OnlineAI {
                                              relevantIDs: Set(QuestionAnswerer.topMatchingNotes(for: question,
                                                                                                 in: relevantNotes,
                                                                                                 limit: 8).map { $0.id }))
-        let body = requestBody(model: model ?? Assistant.defaultModel,
-                              messages: messages,
-                              system: prompt)
-        return await sendRequest(body: body, apiKey: key, model: model ?? Assistant.defaultModel)
+        let namedModel = model ?? Assistant.defaultModel
+        // The listing is only what fit in the first request, so the conversation is not ended when the
+        // model asks for more: the app reads its own snapshot of the notes, answers with the real text,
+        // and puts the question again. Nothing on screen moves during a lookup, and the notes it fetches
+        // come from the same snapshot as the listing, so an answer cannot straddle two versions of the
+        // notebook. Only `read_notes` is answered here; every other action goes back to the app to be
+        // carried out or confirmed, exactly as before.
+        var round = 0
+        while true {
+            let body = requestBody(model: namedModel, messages: messages, system: prompt)
+            // The first request gets the full retries; a follow-up that fails mid-conversation should
+            // not spend another minute before saying so.
+            let outcome = await sendRequest(body: body, apiKey: key, model: namedModel,
+                                            attempts: round == 0 ? 3 : 2)
+            guard case .reply(let raw) = outcome else { return outcome }
+            let asked = AIProtocol.parse(raw)
+            guard asked.action == "read_notes" else { return .reply(raw) }
+            guard round < lookupRounds else { return .reply(raw) }
+
+            emit("assistant", raw)
+            var fetched = AIProtocol.lookupText(for: asked, in: relevantNotes, budget: lookupBudget)
+            if round == lookupRounds - 1 {
+                fetched += "\n\nThat was the last lookup this question allows. Answer from what you have read, and say which note you did not get to read rather than guessing about it."
+            }
+            emit("user", "[from the notes] \(fetched)")
+            round += 1
+        }
     }
 
     /// The instructions go in as a leading `system` turn, which is what every OpenAI-shaped service
