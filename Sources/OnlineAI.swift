@@ -174,39 +174,29 @@ enum OnlineAI {
         guard !key.isEmpty else { return .failure(.noKey) }
         if let problem = keyProblem(key) { return .failure(.keyLooksWrong(problem)) }
 
-        // The conversation is folded into alternating user / assistant turns before it is sent. Two
-        // reasons, both learned the hard way: the app can legitimately end up with two assistant turns
-        // in a row (a declined confirmation, a card answered from the input bar), and an empty content
-        // field makes some servers answer with a 400 that has nothing useful in it. Merging adjacent
-        // turns of a kind keeps the transcript one the model reads as a conversation rather than as a
-        // list of fragments, and costs nothing.
+        // The transcript is folded as it is copied: a turn is merged into the previous one whenever
+        // they have the same speaker. That is the whole rule, and it is what makes the result safe to
+        // send - two assistant lines in a row happen on their own (a failed request leaves one behind,
+        // and a confirmation answered from the input bar adds another), an empty content field makes
+        // some services answer with a 400 that says nothing useful, and a conversation should not open
+        // with the model's voice. Merging on the way in fixes all three without a second pass.
         var messages: [[String: Any]] = []
-        var pendingUser: [String] = []
-        var pendingAssistant: [String] = []
-        func flush() {
-            if !pendingUser.isEmpty {
-                messages.append(["role": "user", "content": pendingUser.joined(separator: "\n")])
-                pendingUser = []
+        func emit(_ role: String, _ text: String) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            if role == "assistant", messages.isEmpty { return }
+            if let last = messages.last, (last["role"] as? String) == role,
+               let existing = last["content"] as? String {
+                messages[messages.count - 1] = ["role": role, "content": existing + "\n" + trimmed]
+            } else {
+                messages.append(["role": role, "content": trimmed])
             }
-            if !pendingAssistant.isEmpty {
-                messages.append(["role": "assistant", "content": pendingAssistant.joined(separator: "\n")])
-                pendingAssistant = []
-            }
         }
-        // A conversation should open with the questioner, so leading assistant lines are skipped.
-        for turn in history.suffix(16).drop(while: { $0.role == "model" }) {
-            if turn.role == "model" { pendingAssistant.append(turn.text) } else { pendingUser.append(turn.text) }
-            if pendingUser.isEmpty == pendingAssistant.isEmpty { flush() }
+        for turn in history.suffix(16) {
+            emit(turn.role == "model" ? "assistant" : "user", turn.text)
         }
-        flush()
-        // Whatever the history ended as, the message being asked now is the user's turn - folded into
-        // the last one if that was already a user turn, so the two never sit side by side.
-        let trailing = messages.last?["role"] as? String
-        if trailing == "user", let existing = messages.last?["content"] as? String {
-            messages[messages.count - 1] = ["role": "user", "content": existing + "\n" + question]
-        } else {
-            messages.append(["role": "user", "content": question])
-        }
+        // Whatever the history ended as, the question being asked now is the user's turn.
+        emit("user", question)
 
         let prompt = AIProtocol.systemPrompt(notes: relevantNotes,
                                              notePattern: notePattern.isEmpty ? nil : notePattern,
