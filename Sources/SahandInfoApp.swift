@@ -486,8 +486,9 @@ enum ReminderTier: Int, Hashable {
         }
     }
 
-    /// Red for the nearest third of what is waiting (at most three), amber for about half of what is
-    /// left, green for the rest. Nine reminders is 3 / 3 / 3, seven is 3 / 2 / 2, two is 1 / 1.
+    /// Thirds, nothing more clever than that: the nearest third red, the next third amber, the rest
+    /// green. Nine is 3 / 3 / 3, eight is 3 / 3 / 2, seven is 3 / 2 / 2, four is 2 / 1 / 1, and with
+    /// one or two reminders waiting the nearest simply is the urgent one.
     static func tiers(of notes: [Note], now: Date = Date()) -> [UUID: ReminderTier] {
         var result: [UUID: ReminderTier] = [:]
         var waiting: [Note] = []
@@ -499,12 +500,13 @@ enum ReminderTier: Int, Hashable {
         }
         waiting.sort { ($0.reminderDate ?? .distantFuture) < ($1.reminderDate ?? .distantFuture) }
         let count = waiting.count
-        let redCount = min(3, (count + 2) / 3)
-        let remaining = max(0, count - redCount)
-        let amberCount = (remaining + 1) / 2
+        // Integer thirds with the remainder pushed to the earlier band, so a short list still has a
+        // red row rather than starting at amber.
+        let redEnd = (count + 2) / 3
+        let amberEnd = (count * 2 + 2) / 3
         for (index, note) in waiting.enumerated() {
-            if index < redCount { result[note.id] = .urgent }
-            else if index < redCount + amberCount { result[note.id] = .comingUp }
+            if index < redEnd { result[note.id] = .urgent }
+            else if index < amberEnd { result[note.id] = .comingUp }
             else { result[note.id] = .later }
         }
         return result
@@ -515,10 +517,10 @@ enum ReminderTier: Int, Hashable {
 
 /// Everything the app knows about your notes, and the only place they are written.
 ///
-/// Every mutation goes through `mutate`, which first pushes a labelled snapshot: that is what makes
-/// the Undo banner work for *all* of them - a swipe delete, a bulk delete from the assistant, an
-/// import, clearing everything. Previously undo was per-action and, for a delete, tried to update a
-/// note that no longer existed, so the button pressed and nothing came back.
+/// Every mutation goes through `mutate`, which first pushes a labelled snapshot - so anything can be
+/// rolled back, including a delete, which used to try to update a note that no longer existed and so
+/// restored nothing. What differs is the announcement: `mutate` raises the Undo banner only when
+/// notes actually went away, and stays quiet otherwise. See `offersUndo`.
 @MainActor
 final class NotesStore: ObservableObject {
     @Published private(set) var notes: [Note] = [] {
@@ -574,7 +576,20 @@ final class NotesStore: ObservableObject {
 
     /// The urgency colour every row should use, computed from all notes so the Notes tab and the Date
     /// tab agree, and so switching a Date filter cannot repaint anything.
-    func reminderTiers() -> [UUID: ReminderTier] { ReminderTier.tiers(of: notes) }
+    ///
+    /// Row views ask for this once per row, so it is cached: ranking is a sort over every note, and
+    /// recomputing it for all 500 rows of a long list on every scroll frame is the kind of work that
+    /// turns a flash animation into a stutter. The cache is keyed on the data revision and on the
+    /// minute, because a reminder turning overdue is the one thing that changes without the data doing
+    /// so - a minute of lag on that matches what the rows already display.
+    private var tiersCache: (revision: Int, minute: Int, tiers: [UUID: ReminderTier])?
+    func reminderTiers() -> [UUID: ReminderTier] {
+        let minute = Int(Date().timeIntervalSince1970 / 60)
+        if let cache = tiersCache, cache.revision == revision, cache.minute == minute { return cache.tiers }
+        let fresh = ReminderTier.tiers(of: notes)
+        tiersCache = (revision, minute, fresh)
+        return fresh
+    }
     var canUndo: Bool { !undoStack.isEmpty }
 
     /// The Undo bar is an offer, not a hostage: putting it away must not destroy the snapshot.
@@ -688,7 +703,9 @@ final class NotesStore: ObservableObject {
         // Ticking a reminder, saving what you typed, tagging, setting a date - all undoable by hand
         // in seconds, and a popup for each of them was noise that taught people to swipe it away
         // without reading, which is how a real "3 notes deleted, Undo?" gets missed.
-        // Every change still lands on the undo stack, so the chat's own Undo chip works as before.
+        // Every change still lands on the undo stack, so the chat's own Undo chip works as before, and
+        // a later change retires the banner rather than letting it nag about something already moved on
+        // from: "Undo" offered next to an unrelated edit would undo the wrong thing.
         undoOfferVisible = offersUndo ?? (next.count < previous.count)
         undoGeneration += 1
         notes = next
@@ -1323,10 +1340,10 @@ struct NoteRowView: View {
                             Text(rowDateFormatter.localizedString(for: reminder, relativeTo: Date()))
                                 .font(.caption2.weight(.semibold))
                         }
-                        .foregroundStyle(rowColor(for: reminder))
+                        .foregroundStyle(rowColor)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Capsule().fill(rowColor(for: reminder).opacity(0.13)))
+                        .background(Capsule().fill(rowColor.opacity(0.13)))
                         .contentShape(Capsule())
                         // The colour follows the reminder, not the tab you happen to be on, so it
                         // settles into a shade instead of snapping when a tick changes the ranking.
@@ -1364,11 +1381,10 @@ struct NoteRowView: View {
         .cardBackground()
     }
 
-    private func rowColor(for reminder: Date) -> Color {
-        // Same rule as the Date tab: overdue and the nearest few are red, the next ones amber, the
-        // rest green, and a finished reminder goes quiet. Only a note with no date keeps the theme.
-        if let tier { return tier.color }
-        return settings.theme.endColor
+    /// Same rule as the Date tab - a past date and the nearest few are red, the next ones amber, the
+    /// rest green, a finished reminder goes quiet. A note with no reminder date keeps the theme colour.
+    private var rowColor: Color {
+        tier?.color ?? settings.theme.endColor
     }
 
     /// "in 2 days" / "3 days ago" in the list, so a reminder's date is visible where the note is -
