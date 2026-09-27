@@ -170,7 +170,13 @@ enum OnlineAI {
     /// but a wait that needs explaining is a wait that should not happen - so the budget ends the
     /// conversation rather than the user ending it. It only gates lookups: the first request keeps all
     /// its retries, because a setup that answers slowly must still be allowed to answer at all.
-    static let questionTimeBudget: TimeInterval = 45
+    ///
+    /// Sixty seconds because that is the window the provider measures in: requests and tokens per
+    /// *minute*, so a question that finishes inside one minute is also a question that did not spend
+    /// the next one waiting out its own throttle. It is not a judgment about how long an answer should
+    /// take - 45 seconds, the number first written here, cut lookups off for anyone whose opening
+    /// request had to retry, which is precisely the moment reading is most useful.
+    static let questionTimeBudget: TimeInterval = 60
 
     private static var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -236,7 +242,9 @@ enum OnlineAI {
         // notebook. Only `read_notes` is answered here; every other action goes back to the app to be
         // carried out or confirmed, exactly as before.
         var round = 0
-        let started = Date()
+        // Uptime, not the date: a clock that steps forward for a time-zone change or a daylight-saving
+        // jump must not be able to end a conversation that was on its second look.
+        let started = ProcessInfo.processInfo.systemUptime
         while true {
             let body = requestBody(model: namedModel, messages: messages, system: prompt)
             // The first request gets the full retries; a follow-up that fails mid-conversation should
@@ -247,7 +255,7 @@ enum OnlineAI {
             let asked = AIProtocol.parse(raw)
             guard asked.action == "read_notes" else { return .reply(raw) }
             guard round < lookupRounds else { return .reply(raw) }
-            if Date().timeIntervalSince(started) > questionTimeBudget {
+            if ProcessInfo.processInfo.systemUptime - started > questionTimeBudget {
                 // Deliberately not the reply, which would render as "ask me once more" and invite the
                 // same slow exchange a second time. The timeout message already says what to do about
                 // it, and "nothing was changed" is true of a read.
