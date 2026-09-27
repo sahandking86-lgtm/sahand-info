@@ -158,53 +158,113 @@ enum AIProtocol {
         let priorityBodyLimit = 4_000
         let otherBodyLimit = 240
 
+        /// The sentence a shortened note carries. It is a *constant* rather than a literal inside
+        /// `clipped` because the budget maths has to subtract it: a slice that comes with a warning
+        /// attached costs more than its allowance, and across three hundred notes that overage is what
+        /// tips a request over the ceiling.
+        let clipWarning = "\n…(the rest of this note was left out to keep the request small)"
         func clipped(_ text: String, _ limit: Int) -> String {
             guard text.count > limit else { return text }
-            return String(text.prefix(limit)) + "\n…(the rest of this note was left out to keep the request small)"
+            return String(text.prefix(limit)) + clipWarning
         }
 
-        let lines = notes.map { note -> String in
-            let title = note.title.isEmpty ? "Untitled" : note.title
-            var parts = ["Title: \(title)"]
-            // The model used to be shown only titles and bodies, so it could not answer anything
-            // about categories or reminders, and could not use one to find a note.
-            if !note.categoryEnglish.isEmpty {
+        // Which notes deserve the room: the ones the question's own words point at, then everything
+        // else in the list's own order.
+        let relevant = relevantIDs.isEmpty ? [] : notes.filter { relevantIDs.contains($0.id) }
+        let ordered = relevant + notes.filter { !relevantIDs.contains($0.id) }
+
+        func title(of note: Note) -> String { note.title.isEmpty ? "Untitled" : note.title }
+
+        /// One note, described at one of three levels of detail: everything; then bodies only for the
+        /// notes that look relevant, with all their metadata; then a title and category each, sized so
+        /// that every note in the collection gets one. The levels
+        /// exist because the service counts tokens for the *whole* request per minute, so the only way
+        /// to keep working for somebody with four hundred notes is to give up detail in a chosen order -
+        /// the bodies of notes nobody asked about first - instead of sending a request that gets
+        /// refused. A question that points at nothing treats every note as a candidate.
+        func describe(_ note: Note, bodyLimit: Int, withDetails: Bool) -> String {
+            var parts = ["Title: \(title(of: note))"]
+            if withDetails, !note.categoryEnglish.isEmpty {
                 parts.append("Category: \(note.categoryEnglish)\(note.categoryKurdish.isEmpty ? "" : " / \(note.categoryKurdish)")")
             }
-            if let reminder = note.reminderDate {
+            if withDetails, let reminder = note.reminderDate {
                 parts.append("Reminder: \(reminderDateFormatter.string(from: reminder)) (\(note.isReminderCompleted ? "done" : "open"))")
             }
-            parts.append("Created: \(dayFormatter.string(from: note.dateCreated)), edited: \(dayFormatter.string(from: note.dateModified))")
-            let limit = relevantIDs.isEmpty ? note.body.count
-                                           : (relevantIDs.contains(note.id) ? priorityBodyLimit : otherBodyLimit)
-            let body = clipped(note.body, limit)
-            parts.append("Body: \(body.isEmpty ? "(empty)" : body)")
+            if withDetails {
+                parts.append("Created: \(dayFormatter.string(from: note.dateCreated)), edited: \(dayFormatter.string(from: note.dateModified))")
+            } else if !note.categoryEnglish.isEmpty {
+                // Even the meanest line says what the note is about, so "which ones are Work" stays
+                // answerable when nothing else can be afforded.
+                parts[0] = "Title: \(title(of: note)) (\(note.categoryEnglish))"
+            }
+            let body = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if bodyLimit > 0, !body.isEmpty { parts.append("Body: \(clipped(body, bodyLimit))") }
             return parts.joined(separator: "\n")
         }
-        var context = lines.joined(separator: "\n\n")
-        var truncationNotice = ""
-        if !relevantIDs.isEmpty,
-           notes.contains(where: { !relevantIDs.contains($0.id) && $0.body.count > otherBodyLimit }) {
-            truncationNotice = "\n\nNote: every note is listed, but the ones that don't look relevant to this question are shown as an excerpt. If the answer might be in a part you were not given, say that instead of saying it is not there."
-        }
-        if context.count > contextBudget {
-            let perNote = max(400, contextBudget / max(lines.count, 1))
-            context = notes.map { note -> String in
-                let body = note.body
-                let shown = body.count > perNote ? String(body.prefix(perNote)) + "\n…(the rest of this note was left out to keep the request small)" : body
-                let title = note.title.isEmpty ? "Untitled" : note.title
-                var parts = ["Title: \(title)"]
-                if !note.categoryEnglish.isEmpty { parts.append("Category: \(note.categoryEnglish)") }
-                if let reminder = note.reminderDate {
-                    parts.append("Reminder: \(reminderDateFormatter.string(from: reminder)) (\(note.isReminderCompleted ? "done" : "open"))")
-                }
-                parts.append("Body: \(shown.isEmpty ? "(empty)" : shown)")
-                return parts.joined(separator: "\n")
-            }.joined(separator: "\n\n")
-            truncationNotice = "\n\nNote: \(notes.count) notes exist and some bodies above are shortened. If the answer might be in a part you were not given, say that instead of saying it is not there."
+
+        // What one line costs before any of its body is added, at the compact level. Subtracting the
+        // real total rather than guessing at a fixed overhead is what keeps the budget *used*: a
+        // hundred and twenty notes otherwise lands on "titles only" with fourteen thousand characters
+        // of room left unspent, which reads to the user as the assistant having forgotten everything.
+        let compactFraming = ordered.reduce(0) { $0 + describe($1, bodyLimit: 0, withDetails: false).count + 2 }
+        let sharedBodyLimit = max(0, (contextBudget - compactFraming) / max(ordered.count, 1) - clipWarning.count)
+
+        func describe(_ note: Note, level: Int) -> String {
+            let priority = relevantIDs.isEmpty || relevantIDs.contains(note.id)
+            switch level {
+            case 0: return describe(note, bodyLimit: priority ? (relevantIDs.isEmpty ? Int.max : priorityBodyLimit) : otherBodyLimit, withDetails: true)
+            case 1: return describe(note, bodyLimit: priority ? priorityBodyLimit : 0, withDetails: true)
+            default: return describe(note, bodyLimit: priority ? sharedBodyLimit : 0, withDetails: false)
+            }
         }
 
-        let notesHeader = notesAreComplete
+        func listing(_ level: Int) -> [String] {
+            ordered.map { describe($0, level: level) }
+        }
+
+        var entries = listing(0)
+        var context = entries.joined(separator: "\n\n")
+        var truncationNotice = ""
+        if !relevantIDs.isEmpty,
+           ordered.contains(where: { !relevantIDs.contains($0.id) && $0.body.count > otherBodyLimit }) {
+            truncationNotice = "\n\nNote: every note is listed, but the ones that don't look relevant to this question are shown as an excerpt. If the answer might be in a part you were not given, say that instead of saying it is not there."
+        }
+        var level = 0
+        while context.count > contextBudget && level < 2 {
+            level += 1
+            entries = listing(level)
+            context = entries.joined(separator: "\n\n")
+            // Two different truths, depending on whether anything was prioritised: with a focused
+            // question the far notes lose their bodies, and with one that pointed at nothing every note
+            // keeps a slice of its own. Saying the first about the second would make the model think it
+            // was given a subset, when it was given all of them briefly.
+            truncationNotice = relevantIDs.isEmpty
+                ? "\n\nNote: \(notes.count) notes exist and all of them are listed here; their bodies are shortened as much as the size the service allows requires, and some may carry no body at all. If the answer might be in a part you were not given, say that instead of saying it is not there, and use the list or search tool to look again."
+                : "\n\nNote: \(notes.count) notes exist. To keep this request within the size the service allows, bodies are shown only for the notes that look relevant; the rest are listed by title. If the answer might be in a note you were not given, say that instead of saying it is not there."
+        }
+        // Last resort: fewer notes rather than a request that is refused outright. Cutting the list is
+        // also what makes "these are ALL your notes" untrue, so that claim is tied to this flag and
+        // cannot survive the cut - a model told the list is complete answers "that isn't in your notes"
+        // about something it was never shown, which is the worst possible way to be wrong here.
+        var omitted = 0
+        if context.count > contextBudget {
+            var kept: [String] = []
+            var used = 0
+            // Whole notes only, and counted in notes: the split cannot be done on the finished text,
+            // because a note with a blank line in it *is* two pieces of text and would then be
+            // reported as two notes and cut in half.
+            for entry in entries {
+                if used + entry.count + 2 > contextBudget, !kept.isEmpty { break }
+                kept.append(entry)
+                used += entry.count + 2
+            }
+            omitted = ordered.count - kept.count
+            context = kept.joined(separator: "\n\n")
+            truncationNotice = "\n\nNote: \(notes.count) notes exist and only \(kept.count) are shown here, because the whole list would not fit in one request. Do not say something is missing from the collection; say you were shown part of it. For a count or a list, use list_notes or search_notes, which the app answers from the device."
+        }
+        let listingIsComplete = omitted == 0
+
+        let notesHeader = (notesAreComplete && listingIsComplete)
             ? "Here are ALL of the user's notes, every single one, with their categories, reminders and dates. Read every note before saying something is missing - do not skim, and do not assume. If the answer is anywhere in here, state it confidently."
             : "Notes that look relevant (there may be others):"
 
@@ -329,39 +389,52 @@ enum AIProtocol {
                 .replacingOccurrences(of: "```", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard let start = text.firstIndex(of: "{") else { return nil }
-
         // Balanced-brace scan rather than first-brace-to-last-brace, so a stray "{" in a note title
         // or a second object can't stretch the slice.
-        var depth = 0
-        var inString = false
-        var escaped = false
-        var index = start
-        var end: String.Index? = nil
-        while index < text.endIndex {
-            let character = text[index]
-            if escaped {
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                inString.toggle()
-            } else if !inString {
-                if character == "{" { depth += 1 }
-                if character == "}" {
-                    depth -= 1
-                    if depth == 0 { end = index; break }
+        func scan(from start: String.Index) -> (slice: Substring, next: String.Index)? {
+            var depth = 0
+            var inString = false
+            var escaped = false
+            var index = start
+            while index < text.endIndex {
+                let character = text[index]
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString.toggle()
+                } else if !inString {
+                    if character == "{" { depth += 1 }
+                    if character == "}" {
+                        depth -= 1
+                        if depth == 0 { return (text[start...index], text.index(after: index)) }
+                    }
                 }
+                index = text.index(after: index)
             }
-            index = text.index(after: index)
-        }
-        guard let end else { return nil }
-        let slice = String(text[start...end])
-        guard let data = slice.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        return object
+
+        // Every object the reply contains, in order. A chat model is asked for exactly one, and
+        // usually obeys; the models that don't are the reasoning kind, which preface the answer with a
+        // sentence about the schema ("respond with {action, reply}") or restate it afterwards. Taking
+        // the first object then means reading the model's own note about the format as the answer.
+        var found: [[String: Any]] = []
+        var cursor = text.startIndex
+        while let open = text[cursor...].firstIndex(of: "{"), let scanned = scan(from: open) {
+            if let data = String(scanned.slice).data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                found.append(object)
+            }
+            cursor = scanned.next
+        }
+        guard !found.isEmpty else { return nil }
+        // Prefer the last one that looks like an answer rather than an example: the protocol's own keys
+        // (or a category pair, for the note-tagging call). If none of them claim to be an answer, the
+        // last is the better guess than the first, because a rambling model puts the real thing last.
+        let isAnswer = ["action", "reply", "category_en"]
+        return found.last { object in object.keys.contains(where: { isAnswer.contains($0) }) } ?? found.last
     }
 
     /// Models invent names for things they have seen elsewhere. Mapping the obvious synonyms onto
