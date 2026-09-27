@@ -182,7 +182,11 @@ you might notice it.
   though it had only read the newest few notes. Each lookup is another request, and the provider's
   automatic prompt caching normally makes a repeated prefix stop counting against the per-minute limit —
   but the cache is best-effort and not available on every model in the picker, so a long chain of lookups
-  can still be throttled, and the app then says so rather than answering from the part it had.
+  can still be throttled, and the app then says so rather than answering from the part it had. The whole
+  exchange gets 60 seconds - one minute, which is the window the limits are measured in - and after that
+  the app stops going back for more and says so, instead of leaving you watching dots for four minutes on
+  a bad connection. Asking the same question again usually finishes it, because the reading starts over
+  with a warm cache.
 - **One thing is sent without being asked**, and it can be switched off: when you stop typing a note
   that has no category, its title and text go out so a category can be suggested (Settings → AI
   Assistant → *Suggest a category while I type*). Everything else leaves the phone only because you
