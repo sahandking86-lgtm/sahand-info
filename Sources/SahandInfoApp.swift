@@ -458,12 +458,15 @@ extension Note {
     }
 }
 
-/// How pressing a reminder is *compared with the others you are waiting on*. This is the meaning of
-/// the colours, in both the Notes list and the Date tab: the nearest few red, the next few amber, the
-/// rest green. Counting days instead would make one lonely reminder look calm - or frantic -
-/// regardless of what it is the only one of, and the colour would change when a filter was switched,
-/// which is why the tier is derived from the whole set once and shared.
-enum ReminderTier: Int, Hashable {
+/// How pressing a reminder is *compared with the others you are waiting on*: the nearest third red,
+/// the next third amber, the rest green, past its date red, finished grey. Ranking rather than a
+/// number of days is what the user asked for and it is the more honest reading of a list - with four
+/// reminders the closest one really is the urgent one, and with forty the closest few still are, while
+/// a day-count cut-off would paint everything calm in December and everything alarming in January.
+///
+/// The tiers are derived from the whole set at once and shared by both tabs, so a row cannot mean one
+/// thing in the Notes list and another on the Date tab, and choosing a filter cannot repaint anything.
+enum ReminderTier: Hashable {
     case overdue, urgent, comingUp, later, done
 
     var color: Color {
