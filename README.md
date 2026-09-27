@@ -14,8 +14,12 @@ app builds itself (`AIActionPreview`), so a model that invents a note title gets
 that note" rather than an edit to whichever note happened to match loosely; a delete of more than one
 note lists the titles and counts them before anything is removed.
 
-There is one AI engine — **Gemini** (`gemini-3.5-flash-lite`) with your own free API key,
-called over WiFi from `Sources/OnlineAI.swift`. Alongside it, `QuestionAnswerer` in
+There are two AI assistants to choose between in Settings, each with your own free API key, both
+called over WiFi from `Sources/OnlineAI.swift`: **Gemini** (Google AI Studio) and **Groq**
+(`openai/gpt-oss-120b` by default — a 117B reasoning model, and the reason it is offered is that it
+answers better than a *Flash-Lite* model while being free). Which one you pick also decides what
+happens to your text: see [Data, privacy, and backups](#data-privacy-and-backups). Alongside them,
+`QuestionAnswerer` in
 `Sources/SahandInfoApp.swift` is a dependency-free keyword/synonym/value matcher, used for
 **Jump & Highlight** mode: that mode needs no key and no network at all, so the app is
 still useful with no connectivity.
@@ -47,7 +51,9 @@ when it writes a note for you and, after a pause in typing, for notes you write 
   nothing to resolve or download at build time.
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
 - An iPhone or simulator on **iOS 17+**.
-- A [free Gemini API key](https://aistudio.google.com/apikey) for the AI Answer mode.
+- A free API key for one assistant: [Google AI Studio](https://aistudio.google.com/apikey) or
+  [Groq](https://console.groq.com/keys). Neither needs a card; both give far more than the
+  handful of requests a day this app makes.
 
 ## Getting started
 
@@ -61,8 +67,8 @@ There is no `Podfile`/`Package.swift`: the Xcode project is generated from `proj
 **edit `project.yml` (and `Sources/Info.plist`) rather than the generated project**, and
 re-run `xcodegen generate` after changing either.
 
-Without a key the app still works — notes, reminders, search and Jump & Highlight are all
-local — but *AI Answer* replies with "Add your Gemini API key in Settings first".
+Without a key the app still works — notes, reminders, search and Jump & Highlight are all local —
+but *AI Answer* replies with "Add your Google (or Groq) API key in Settings first".
 
 ### Building an IPA
 
@@ -106,7 +112,7 @@ Sources/
   AppCoordinator.swift          Which tab is open, what is selected, pending confirmations, notices
   AIShared.swift                The prompt + JSON protocol the assistant speaks
   AIActions.swift               Applying a parsed action: previews, confirmations, real edits
-  OnlineAI.swift                Gemini REST calls, retries, category suggestions
+  OnlineAI.swift                provider choice, REST calls, retries, category suggestions
   ReminderNotifications.swift   Local notifications for dated reminders
   Info.plist                    Hand-maintained, pointed at by INFOPLIST_FILE
 Resources/
@@ -126,9 +132,10 @@ scripts/
 ## Data, privacy, and backups
 
 - Notes live only on the device, in `UserDefaults` as JSON under `sahand_info_notes_v1`
-  (settings: `sahand_info_answer_mode_v1`, `sahand_info_deepseek_api_key_v1`,
-  `sahand_info_note_pattern_v1`, `sahand_info_theme_v1` — the middle key keeps its original
-  name so existing installs keep their saved key).
+  (settings: `sahand_info_answer_mode_v1`, `sahand_info_deepseek_api_key_v1` — the Google key, under
+  the name it was first saved with, so existing installs keep working — plus
+  `sahand_info_groq_api_key_v1`, `sahand_info_provider_v1`, `sahand_info_gemini_model_v1`,
+  `sahand_info_groq_model_v1`, `sahand_info_note_pattern_v1`, `sahand_info_theme_v1`).
 - **Backups are yours to keep**: Settings → *Export All Notes* writes
   `SahandInfoNotes-YYYY-MM-DD.json` (a pretty-printed array of note objects) into the app's
   own `Application Support/Backups` — **not** the temporary directory, so the file is still there
@@ -141,10 +148,17 @@ scripts/
 - Reminder dates schedule **local notifications** (`UNCalendarNotificationTrigger`), one per note,
   replaced wholesale whenever a date changes; tapping one opens that note. The badge in Settings
   tells you whether iOS is actually allowed to deliver them.
-- The only network call is the Gemini request, over HTTPS (no arbitrary loads allowed).
-  Nothing is tracked or collected — see `Resources/PrivacyInfo.xcprivacy`.
-- Before using this for sensitive notes, know: the API key sits in plain `UserDefaults` (not
-  the Keychain), and *AI Answer* sends your notes to Google as prompt context. Every note is listed
+- The only network call is the request to whichever assistant is selected, over HTTPS (no
+  arbitrary loads allowed). Nothing is tracked or collected by the app itself — see
+  `Resources/PrivacyInfo.xcprivacy`.
+- **The two providers do not treat your text the same way.** On Google's free tier their terms say
+  prompts and outputs may be used to improve Google products, and human reviewers may read API input
+  and output; enabling Cloud Billing on the same key ends that. Groq's no-training rule is clause 4.2
+  of its Services Agreement, inference requests are not retained by default, and Zero Data Retention
+  is a self-serve toggle in its console. If a note contains a password, that difference is the whole
+  reason to switch — the app itself sends the same prompt to either.
+- Before using this for sensitive notes, know too: the API key sits in plain `UserDefaults` (not
+  the Keychain), and *AI Answer* sends your notes as prompt context. Every note is listed
   (titles, categories, reminder dates and dates) so counts and lookups stay honest, but only the
   notes your wording points at are sent with their full text — the rest arrive as a short excerpt,
   and the model is told that happened. Use a dedicated key with its own quota, keep secrets out of the notes you ask
@@ -154,7 +168,8 @@ scripts/
 
 ## Known limitations
 
-- *AI Answer* needs a key and connectivity; there is no second engine to fall back to. (The
+- *AI Answer* needs a key and connectivity. There are two providers, but no automatic failover:
+  if one is throttled you switch it yourself in Settings, and both keys can be kept at once. (The
   on-device llama.cpp engine that used to be here is in git history:
   `git log --oneline -- Sources/LocalAI.swift`.)
 - **Notifications only arrive when the app is installed normally.** Installed as a *guest* inside
@@ -176,7 +191,7 @@ scripts/
 | Symptom | Fix |
 | --- | --- |
 | `xcodegen generate` errors with *"Source path ... doesn't exist"* | `Sources/` or `Resources/` is missing. `Resources/` must exist even when it holds nothing but the icon: `mkdir -p Resources`. |
-| *AI Answer* says to add a Gemini key | Settings → AI Assistant → paste a key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then press **Test key** — it says which part of the problem is yours (key rejected, API not enabled for the project, quota spent) instead of blaming the network. |
+| *AI Answer* says to add a key | Settings → AI Assistant → pick the assistant, paste its key ([Google](https://aistudio.google.com/apikey) or [Groq](https://console.groq.com/keys)), then press **Test key** — it says which part of the problem is yours (key rejected, API not enabled, quota spent, model not offered) instead of blaming the network. |
 | Settings says the key looks saved, but every request fails | The key almost certainly has a space or newline in it. Trailing whitespace is stripped on entry now; re-paste it once and the warning goes away. |
 | "Google didn't accept the request (400)" | The response body is quoted in that message — it usually names the exact problem (bad key, wrong model name, project not enabled). |
 | Answers look wrong after editing notes | Every note is listed but only the ones your wording matches are sent in full. If the answer is in a note the question didn't point at, quote a distinctive phrase from it, or open the note and ask from there. |

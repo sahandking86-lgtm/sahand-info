@@ -811,6 +811,46 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Which assistant answers. The two keys are stored separately and switching keeps both, because
+    /// the useful thing to do is try the other one for an afternoon and be able to go back without
+    /// hunting for a pasted key. The Google key keeps its original storage name (`deepseek`, from the
+    /// first build that spoke to DeepSeek) so nobody's working key disappears in an update.
+    @Published var provider: AIProvider {
+        didSet { UserDefaults.standard.set(provider.rawValue, forKey: providerStorageKey) }
+    }
+
+    /// Model per provider, not one shared value: the names mean nothing to each other's API, and a
+    /// single field would either forget the choice or send "gpt-oss-120b" to Google.
+    @Published var geminiModel: String {
+        didSet { UserDefaults.standard.set(geminiModel, forKey: geminiModelStorageKey) }
+    }
+    @Published var groqModel: String {
+        didSet { UserDefaults.standard.set(groqModel, forKey: groqModelStorageKey) }
+    }
+
+    @Published var groqAPIKey: String {
+        didSet {
+            let cleaned = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned != groqAPIKey {
+                groqAPIKey = cleaned
+                return
+            }
+            UserDefaults.standard.set(cleaned, forKey: groqKeyStorageKey)
+        }
+    }
+
+    var activeAPIKey: String { provider == .gemini ? deepSeekAPIKey : groqAPIKey }
+    var activeModel: String { provider == .gemini ? geminiModel : groqModel }
+
+    /// One write path per field so the trimming rule cannot drift between the two keys.
+    func setActiveKey(_ value: String) {
+        if provider == .gemini { deepSeekAPIKey = value } else { groqAPIKey = value }
+    }
+
+    func setActiveModel(_ value: String) {
+        if provider == .gemini { geminiModel = value } else { groqModel = value }
+    }
+
     /// Kept so the Ask tab can tell "no key" apart from "key is set but the last call failed",
     /// instead of showing a spinner that never resolves.
     @Published var lastAIError: String? = nil
@@ -829,10 +869,20 @@ final class SettingsStore: ObservableObject {
 
     private let storageKey = "sahand_info_answer_mode_v1"
     private let apiKeyStorageKey = "sahand_info_deepseek_api_key_v1"
+    private let groqKeyStorageKey = "sahand_info_groq_api_key_v1"
+    private let providerStorageKey = "sahand_info_provider_v1"
+    private let geminiModelStorageKey = "sahand_info_gemini_model_v1"
+    private let groqModelStorageKey = "sahand_info_groq_model_v1"
     private let notePatternStorageKey = "sahand_info_note_pattern_v1"
     private let themeStorageKey = "sahand_info_theme_v1"
 
     init() {
+        // Placeholders: every one of these is overwritten in init, and Swift needs the property
+        // initialised before the conditional fills below.
+        provider = .gemini
+        geminiModel = AIProvider.gemini.defaultModel
+        groqModel = AIProvider.groq.defaultModel
+        groqAPIKey = ""
         if let raw = UserDefaults.standard.string(forKey: storageKey),
            let mode = AnswerMode(rawValue: raw) {
             answerMode = mode
@@ -840,6 +890,19 @@ final class SettingsStore: ObservableObject {
             answerMode = .aiAnswer
         }
         deepSeekAPIKey = UserDefaults.standard.string(forKey: apiKeyStorageKey) ?? ""
+        groqAPIKey = UserDefaults.standard.string(forKey: groqKeyStorageKey) ?? ""
+        if let raw = UserDefaults.standard.string(forKey: providerStorageKey),
+           let saved = AIProvider(rawValue: raw) {
+            provider = saved
+        } else {
+            provider = .gemini
+        }
+        // Empty rather than absent means "never chosen", and the default is the strongest model the
+        // provider gives away for free.
+        let savedGemini = UserDefaults.standard.string(forKey: geminiModelStorageKey) ?? ""
+        geminiModel = savedGemini.isEmpty ? AIProvider.gemini.defaultModel : savedGemini
+        let savedGroq = UserDefaults.standard.string(forKey: groqModelStorageKey) ?? ""
+        groqModel = savedGroq.isEmpty ? AIProvider.groq.defaultModel : savedGroq
         notePattern = UserDefaults.standard.string(forKey: notePatternStorageKey) ?? ""
         if let rawTheme = UserDefaults.standard.string(forKey: themeStorageKey),
            let savedTheme = AppTheme(rawValue: rawTheme) {
@@ -1771,7 +1834,8 @@ struct NoteDetailView: View {
     /// only when one is not already set and a key exists. Runs on the main actor: `notes` must not be
     /// touched from a background thread, which is how a list could end up not repainting.
     private func scheduleAutoCategorize() {
-        guard !settings.deepSeekAPIKey.isEmpty else { return }
+        // The *selected* assistant's key: with Groq chosen and no Google key, tagging should still work.
+        guard !settings.activeAPIKey.isEmpty else { return }
         autoCategorizeTask?.cancel()
 
         let titleSnapshot = draftTitle
@@ -1782,7 +1846,11 @@ struct NoteDetailView: View {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
             guard let current = notesStore.note(id: targetID), current.categoryEnglish.isEmpty else { return }
-            guard let result = await OnlineAI.suggestCategory(title: titleSnapshot, body: bodySnapshot, apiKey: settings.deepSeekAPIKey) else { return }
+            guard let result = await OnlineAI.suggestCategory(title: titleSnapshot,
+                                                              body: bodySnapshot,
+                                                              apiKey: settings.activeAPIKey,
+                                                              provider: settings.provider,
+                                                              model: settings.activeModel) else { return }
             guard !Task.isCancelled else { return }
 
             // Re-fetch rather than reusing `current`, so a category set in between is not clobbered.
@@ -2069,11 +2137,11 @@ struct AskView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
 
-            if settings.deepSeekAPIKey.isEmpty {
+            if settings.activeAPIKey.isEmpty {
                 Button {
                     coordinator.showingSettings = true
                 } label: {
-                    Label("Add your Gemini key in Settings", systemImage: "key.fill")
+                    Label("Add your \(settings.provider.shortName) key in Settings", systemImage: "key.fill")
                         .font(.footnote.weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
@@ -2574,7 +2642,7 @@ struct AskView: View {
             // password" to the AI because it starts with "find" meant the offline mode asked for a
             // key for a question it could answer itself.
             if QuestionAnswerer.wantsAChange(trimmed) {
-                if settings.deepSeekAPIKey.isEmpty {
+                if settings.activeAPIKey.isEmpty {
                     appendPlainText("That needs the assistant, and there's no API key yet. Add one in Settings → AI Assistant, or do it by hand in the Notes tab.")
                 } else {
                     runAI(question: trimmed)
@@ -2623,9 +2691,11 @@ struct AskView: View {
         requestTask = Task { @MainActor in
             let outcome = await OnlineAI.answer(question: question,
                                                relevantNotes: allNotes,
-                                               apiKey: appSettings.deepSeekAPIKey,
+                                               apiKey: appSettings.activeAPIKey,
                                                history: historySnapshot,
-                                               notePattern: appSettings.notePattern)
+                                               notePattern: appSettings.notePattern,
+                                               provider: appSettings.provider,
+                                               model: appSettings.activeModel)
             // Anything that happened while we were away - the chat cleared, a newer question asked,
             // the request stopped - means this result is no longer wanted, applied *or* shown.
             guard !Task.isCancelled, generation == myGeneration else { return }
@@ -2636,10 +2706,11 @@ struct AskView: View {
             let parsed: AIActionResponse
             switch outcome {
             case .failure(let failure):
-                appSettings.lastAIError = failure.message
-                replace(waitingID: waitingID, with: ChatMessage(kind: .plainText(failure.message)))
+                let shown = failure.message(for: appSettings.provider)
+                appSettings.lastAIError = shown
+                replace(waitingID: waitingID, with: ChatMessage(kind: .plainText(shown)))
                 conversationHistory.append(ConversationTurn(role: "user", text: question))
-                conversationHistory.append(ConversationTurn(role: "model", text: "[failed] \(failure.message)"))
+                conversationHistory.append(ConversationTurn(role: "model", text: "[failed] \(failure.message(for: appSettings.provider))"))
                 trimHistory()
                 return
             case .reply(let raw):
@@ -2868,7 +2939,13 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear { keyDraft = settings.deepSeekAPIKey }
+            // Loading and re-loading the draft is the only way the field cannot show one provider's
+            // key while the other is selected: switching assistants swaps what is displayed.
+            .onAppear { keyDraft = settings.activeAPIKey }
+            .onChange(of: settings.provider) { _, _ in
+                keyDraft = settings.activeAPIKey
+                keyTest = .idle
+            }
             // A result line that survives the sheet reads like last week's import.
             .onDisappear { statusMessage = nil }
             .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item]) { result in
@@ -2969,13 +3046,48 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("AI Assistant", systemImage: "key.fill")
 
+            VStack(alignment: .leading, spacing: 10) {
+                // Provider first, because everything below it - the key, the model list, the privacy
+                // line - is different for each one, and pasting a key into the wrong box is the easy
+                // mistake to make here.
+                Picker("Answers with", selection: providerBinding) {
+                    ForEach(AIProvider.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(settings.theme.endColor)
+
+                Picker("Model", selection: modelBinding) {
+                    ForEach(modelChoices, id: \.self) { name in
+                        // The full id, not a prettied-up one: this is a field where people compare
+                        // against what the provider's own console calls the model.
+                        Text(name).tag(name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(settings.theme.endColor)
+
+                Text(settings.provider.dataPolicy)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("Get a free key at \(settings.provider.keyPage) and paste it below. Nothing is sent anywhere until you type in the Ask tab.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     Group {
                         if revealKey {
-                            TextField("Gemini API key", text: $keyDraft)
+                            TextField(settings.provider.keyFieldLabel, text: $keyDraft)
                         } else {
-                            SecureField("Gemini API key", text: $keyDraft)
+                            SecureField(settings.provider.keyFieldLabel, text: $keyDraft)
                         }
                     }
                     .font(.system(.footnote, design: .monospaced))
@@ -2984,7 +3096,7 @@ struct SettingsView: View {
                     .onChange(of: keyDraft) { _, newValue in
                         // Stored trimmed, so a space picked up while pasting cannot turn into
                         // "check your connection".
-                        settings.deepSeekAPIKey = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        settings.setActiveKey(newValue.trimmingCharacters(in: .whitespacesAndNewlines))
                         keyTest = .idle
                     }
 
@@ -2999,15 +3111,20 @@ struct SettingsView: View {
                 .padding(8)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
 
-                if settings.deepSeekAPIKey.isEmpty {
-                    Label("No key set yet — answering and changes need one.", systemImage: "exclamationmark.triangle.fill")
+                if settings.activeAPIKey.isEmpty {
+                    Label("No \(settings.provider.shortName) key set yet — answering and changes need one.", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
-                } else if OnlineAI.keyProblem(settings.deepSeekAPIKey) != nil {
-                    Label("That doesn't look like a Gemini key: \(OnlineAI.keyProblem(settings.deepSeekAPIKey) ?? "").",
+                } else if let problem = OnlineAI.keyProblem(settings.activeAPIKey) {
+                    Label("That doesn't look like a usable key: \(problem).",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
+                } else if let mismatch = OnlineAI.prefixProblem(settings.activeAPIKey, provider: settings.provider) {
+                    // A warning, not a wall: a key that works from a proxy stays usable.
+                    Label("\(mismatch) — it will still be tried.", systemImage: "exclamationmark.triangle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 10) {
@@ -3024,7 +3141,7 @@ struct SettingsView: View {
                         .background(Capsule().fill(settings.theme.endColor.opacity(0.16)))
                     }
                     .buttonStyle(.plain)
-                    .disabled(settings.deepSeekAPIKey.isEmpty || isTestingKey)
+                    .disabled(settings.activeAPIKey.isEmpty || isTestingKey)
 
                     Spacer()
                 }
@@ -3059,7 +3176,7 @@ struct SettingsView: View {
                 }
                 .font(.caption.weight(.semibold))
 
-                Text("Answers run through your own free Gemini key (aistudio.google.com/apikey) over the internet. The free tier is rate-limited, and Google may use free-tier requests to improve their models.")
+                Text("Answers run through your own free \(settings.provider.displayName) key (\(settings.provider.keyPage)) over the internet - the notes themselves are what gets sent, and nothing is stored by this app. \(settings.provider.dataPolicy)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3261,6 +3378,23 @@ struct SettingsView: View {
 
     // MARK: - Key test
 
+    private var providerBinding: Binding<AIProvider> {
+        Binding(get: { settings.provider }, set: { settings.provider = $0 })
+    }
+
+    private var modelBinding: Binding<String> {
+        Binding(get: { settings.activeModel }, set: { settings.setActiveModel($0) })
+    }
+
+    /// The provider's current list, plus the stored choice if it is no longer on it. A model that gets
+    /// dropped from a provider's catalogue must stay visible and selected rather than being quietly
+    /// swapped for another one behind your back.
+    private var modelChoices: [String] {
+        let listed = settings.provider.models
+        let chosen = settings.activeModel
+        return listed.contains(chosen) ? listed : [chosen] + listed
+    }
+
     private var isTestingKey: Bool {
         if case .testing = keyTest { return true }
         return false
@@ -3276,16 +3410,21 @@ struct SettingsView: View {
 
     private func testKey() {
         keyTest = .testing
-        let key = settings.deepSeekAPIKey
+        // The *selected* assistant: two providers now, and a test that quietly checked the Google key
+        // while Groq was picked would say "working" about the thing you are not about to use.
+        let key = settings.activeAPIKey
+        let provider = settings.provider
+        let model = settings.activeModel
         keyTestTask?.cancel()
         keyTestTask = Task { @MainActor in
-            if let failure = await OnlineAI.verifyKey(key) {
-                keyTest = .failed(failure.message)
-                settings.lastAIError = failure.message
+            if let failure = await OnlineAI.verifyKey(key, provider: provider, model: model) {
+                let shown = failure.message(for: provider)
+                keyTest = .failed(shown)
+                settings.lastAIError = shown
             } else {
                 keyTest = .ok
                 settings.lastAIError = nil
-                coordinator.say("Your key works — the assistant can answer and make changes.")
+                coordinator.say("Your \(provider.shortName) key works with \(model) — the assistant can answer and make changes.")
             }
         }
     }
@@ -3707,10 +3846,22 @@ struct DateView: View {
         }
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // The glow is a second, blurred copy of the same shape put *outside* the card, so only its
+        // rim escapes past the rounded edge - the card reads as lit from within rather than as a box
+        // with a drop shadow under it. Order matters: a background added after the card fill sits
+        // further out, and a foreground one would be hidden behind the fill entirely.
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(urgency.color.opacity(note.isReminderCompleted ? 0 : 0.30))
+                .blur(radius: 9)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(urgency.color.opacity(note.isReminderCompleted ? 0 : 0.6), lineWidth: 1.5)
+                .stroke(urgency.color.opacity(note.isReminderCompleted ? 0 : 0.7), lineWidth: 1.5)
         )
+        // A colour on the outline itself, then the halo behind it: the shadow gives the edge a
+        // slightly wider falloff so the tint survives on the darker theme as well as the light one.
+        .shadow(color: urgency.color.opacity(note.isReminderCompleted ? 0 : 0.18), radius: 7, y: 2)
         .flashWhenRecentlyChanged(note.id)
         .opacity(note.isReminderCompleted ? 0.75 : 1)
         .animation(.snappy(duration: 0.3), value: note.isReminderCompleted)
