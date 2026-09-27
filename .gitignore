@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Generated Xcode project — SahandInfo.xcodeproj is produced by `xcodegen
+# generate` from project.yml, so it is never committed.
+# ---------------------------------------------------------------------------
+SahandInfo.xcodeproj/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# ---------------------------------------------------------------------------
+# Build products / CI output
+# ---------------------------------------------------------------------------
+build/
+DerivedData/
+*.ipa
+*.app.dSYM.zip
+*.dSYM.zip
+*.dSYM
+Payload/
+.spm/
+SourcePackages/
+buildServer.json
+
+# ---------------------------------------------------------------------------
+# Python cache (from scripts/check-bundle.py self-tests)
+__pycache__/
+*.pyc
+
+# macOS / editors
+# ---------------------------------------------------------------------------
+.DS_Store
+._*
+*.swp
+*~
+.idea/
+.vscode/

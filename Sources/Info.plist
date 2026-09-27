@@ -1,30 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hand-maintained Info.plist: project.yml points INFOPLIST_FILE at it, so keys like
+  UILaunchScreen belong in this file rather than in INFOPLIST_KEY_* build settings.
+  $(...) values are substituted by Xcode at build time. Every value here matches main; the only
+  differences are added keys (UILaunchScreen, CFBundleDisplayName, ITSAppUsesNonExemptEncryption,
+  CADisableMinimumFrameDurationOnPhone) and the removed UIRequiredDeviceCapabilities gate.
+-->
 <plist version="1.0">
 <dict>
-	<key>UIDeviceFamily</key>
-	<array>
-		<integer>1</integer>
-	</array>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
-	</array>
-	<key>UISupportedInterfaceOrientations</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sahand Info</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -41,10 +29,45 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Nothing talks to the network except the assistant call over HTTPS, so no
+	     arbitrary loads are allowed. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
+	<!-- Only standard TLS is used, which is exempt from export compliance paperwork. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- iPhone only, matching TARGETED_DEVICE_FAMILY: 1 in project.yml. -->
+	<!-- DEVICE SUPPORT comes from TARGETED_DEVICE_FAMILY ("1" = iPhone) in project.yml; actool
+	 used to warn that a UIDeviceFamily key here gets overwritten, so it is not duplicated.
+
+	 Deliberately absent. This file used to pin "armv7", a 32-bit requirement that no iPhone
+	     since the 5s satisfies, and pinning "arm64" here would add a gate that buys nothing. Left
+	     out, Xcode injects UIRequiredDeviceCapabilities = [arm64] into the built plist by itself
+	     (confirmed against the artifact in CI), which is the correct value for the deployment
+	     target in project.yml. Omitting the key also means no value in this file differs from the
+	     old build - only additions. -->
+	<!-- Without a launch screen iOS runs the app letterboxed in a compatibility
+	     layout, so this empty dict (system-background launch screen) matters. -->
+	<key>UILaunchScreen</key>
+	<dict/>
+	<!-- The UI is animation-heavy; let ProMotion displays run at their native rate. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>

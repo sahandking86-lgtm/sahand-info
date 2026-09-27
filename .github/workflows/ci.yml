@@ -1,0 +1,131 @@
+# Fast check on every push / pull request: the repo has to be able to produce a
+# working Xcode project and compile. Same steps as build.yml minus packaging and the
+# artifact upload. Docs-only changes skip it, since macOS runner minutes are expensive.
+name: CI
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check plists (Info.plist, privacy manifest)
+        run: plutil -lint Sources/Info.plist Resources/PrivacyInfo.xcprivacy
+
+      - name: Check asset catalog metadata
+        run: |
+          python3 -m json.tool Resources/Assets.xcassets/Contents.json > /dev/null
+          python3 -m json.tool Resources/Assets.xcassets/AppIcon.appiconset/Contents.json > /dev/null
+
+      # actool rejects an app icon that is not square or carries an alpha channel,
+      # and a wrong size shows up as a blurry icon on the home screen.
+      - name: Check app icon is a 1024x1024 opaque PNG
+        run: |
+          info=$(sips -g pixelWidth -g pixelHeight -g hasAlpha -g format \
+            Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png)
+          echo "$info"
+          echo "$info" | grep -q "pixelWidth: 1024"
+          echo "$info" | grep -q "pixelHeight: 1024"
+          # sips omits hasAlpha entirely for files with no alpha channel, so only a
+          # positive "yes" is a failure here.
+          ! echo "$info" | grep -q "hasAlpha: yes"
+          echo "$info" | grep -q "format: png"
+
+      - name: Check scripts parse
+        run: |
+          for f in scripts/*.sh; do
+            bash -n "$f"
+            echo "ok: $f"
+          done
+
+      # The next steps only mean something if this checker means what it says, so it is tested
+      # on every push, before it is allowed to bless a build.
+      - name: Self-test the bundle checker
+        run: python3 scripts/test-check-bundle.py
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      # The log text of a failed build is not reachable from a dev sandbox (it lives on the
+      # artifact/log endpoints, which answer 403), but annotations are served by api.github.com.
+      # So every compile error and warning is mirrored into an annotation: a big Swift change can
+      # be iterated on from here, one push at a time, without anyone reading a log in a browser.
+      - name: Build app
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/xcodebuild.log"
+          if xcodebuild -project SahandInfo.xcodeproj \
+            -scheme SahandInfo \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee "$log"; then
+            status=0
+          else
+            status=1
+          fi
+
+          encode() { tr -d '\r' | sed 's/%/%25/g; s/\r//g' | cut -c1-400; }
+          grep -E 'error: ' "$log" | grep -v 'deprecated' | awk '!seen[$0]++' | head -n 60 > "$RUNNER_TEMP/errors.txt" || true
+          grep -E 'warning: ' "$log" | grep -v -E 'deprecated|nodirectory' | awk '!seen[$0]++' | head -n 25 > "$RUNNER_TEMP/warnings.txt" || true
+
+          while IFS= read -r line; do
+            printf '::error::%s\n' "$(printf '%s' "$line" | encode)"
+          done < "$RUNNER_TEMP/errors.txt"
+          while IFS= read -r line; do
+            printf '::warning::[compile] %s\n' "$(printf '%s' "$line" | encode)"
+          done < "$RUNNER_TEMP/warnings.txt"
+
+          if [ "$status" -ne 0 ] && [ ! -s "$RUNNER_TEMP/errors.txt" ]; then
+            # Nothing matched the usual "<file>:<line>:<col>: error:" shape - the failure is
+            # elsewhere (linker, script phase, xcodebuild itself). Send the tail so it is readable.
+            tail -n 25 "$log" | while IFS= read -r line; do
+              printf '::error::[tail] %s\n' "$(printf '%s' "$line" | encode)"
+            done
+          fi
+          exit "$status"
+
+      # Runs the same assertions scripts/check-bundle.py makes against the shipped archive, so a
+      # bundle a container launcher could not spawn never even reaches the packaging step. Also
+      # pins the two numbers installers key on to what project.yml declares, which catches a
+      # hand-maintained Info.plist drifting from the spec.
+      - name: Verify built app bundle is launchable
+        run: |
+          app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "::error::no .app produced by xcodebuild"; exit 1; }
+          report=$(python3 scripts/check-bundle.py -v "$app" 2>&1) || {
+            echo "::error::$(printf '%s' "$report" | tr '\n' ' ')"; exit 1; }
+          want_bid=$(awk '/PRODUCT_BUNDLE_IDENTIFIER:/ {gsub(/[",]/,"",$2); print $2; exit}' project.yml)
+          want_ver=$(awk '/MARKETING_VERSION:/ {gsub(/[",]/,"",$2); print $2; exit}' project.yml)
+          bid=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleIdentifier"])' "$app/Info.plist")
+          ver=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleShortVersionString"])' "$app/Info.plist")
+          {
+            [ -z "$want_bid" ] || [ "$bid" = "$want_bid" ]
+            [ -z "$want_ver" ] || [ "$ver" = "$want_ver" ]
+          } || { echo "::error::built id/version ($bid, $ver) do not match project.yml ($want_bid, $want_ver)"; exit 1; }
+          while IFS= read -r line; do echo "::warning::[sahand-info] $line"; done <<< "$report"
+          {
+            echo "## Built bundle"
+            echo '```'
+            echo "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

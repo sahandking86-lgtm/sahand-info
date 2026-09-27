@@ -1,24 +1,26 @@
 name: Build IPA
 on:
   workflow_dispatch:
+
+concurrency:
+  group: build-ipa
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 30
     env:
       HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download local AI model
-        run: |
-          mkdir -p Resources
-          curl -L -f "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" -o Resources/model.gguf
-          ls -lh Resources/model.gguf
-
       - name: Install XcodeGen
         run: brew install xcodegen
+
       - name: Generate Xcode project
         run: xcodegen generate
+
       - name: Build unsigned app
         run: |
           xcodebuild -project SahandInfo.xcodeproj \
@@ -28,13 +30,63 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+
+      # Both checks below call scripts/check-bundle.py - the same assertions, on the build
+      # directory and then again on the bundle as it sits inside the shipped archive. That script
+      # parses the Mach-O header itself, so it needs no plutil/otool/sips and behaves identically
+      # on a runner and on a laptop.
+      - name: Verify app bundle
+        run: |
+          app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "::error::no .app produced by xcodebuild"; exit 1; }
+          report=$(python3 scripts/check-bundle.py -v "$app" 2>&1) || {
+            echo "::error::$(printf '%s' "$report" | tr '\n' ' ')"; exit 1; }
+          {
+            echo "## App bundle"
+            echo '```'
+            echo "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package IPA
         run: |
+          rm -rf Payload SahandInfo.ipa
           mkdir -p Payload
-          cp -r "build/Build/Products/Release-iphoneos/Sahand Info.app" Payload/
+          app=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "no .app produced" >&2; exit 1; }
+          cp -R "$app" Payload/
+          # -r with no -y/-9: byte-for-byte the same invocation main uses, so packaging is
+          # never a variable when comparing a working main IPA against a branch IPA.
           zip -r SahandInfo.ipa Payload
+          rm -rf Payload
+          ls -lh SahandInfo.ipa
+
+      # The package is what a container launcher actually sees, so validate the copy that went
+      # through zip + unzip rather than the one still in DerivedData. A green run therefore proves
+      # the .ipa is launchable-shaped, and any remaining failure is on-device state (a stale
+      # container entry, a truncated transfer) rather than something this workflow produced.
+      - name: Validate packaged IPA
+        run: |
+          rm -rf "$RUNNER_TEMP/check" && mkdir -p "$RUNNER_TEMP/check"
+          unzip -q SahandInfo.ipa -d "$RUNNER_TEMP/check"
+          app=$(find "$RUNNER_TEMP/check/Payload" -maxdepth 1 -name "*.app" -type d | head -n 1)
+          test -n "$app" || { echo "::error::no .app inside Payload/ - installers see Unknown.app"; exit 1; }
+          report=$(python3 scripts/check-bundle.py -v "$app" 2>&1) || {
+            echo "::error::the bundle inside SahandInfo.ipa is not launchable: $(printf '%s' "$report" | tr '\n' ' ')"
+            exit 1; }
+          # Annotations, not just logs: they are served by api.github.com, which stays readable
+          # from a dev sandbox while Actions log text often is not.
+          while IFS= read -r line; do echo "::warning::[sahand-info] $line"; done <<< "$report"
+          {
+            echo "### Packaged app, as it sits inside SahandInfo.ipa"
+            echo '```'
+            echo "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: SahandInfo-ipa
           path: SahandInfo.ipa
+          if-no-files-found: error
