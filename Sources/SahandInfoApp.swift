@@ -485,6 +485,10 @@ final class NotesStore: ObservableObject {
     /// Whether the banner is showing. Pressing "Later" hides the banner; it does not make the change
     /// un-undoable, and the assistant can still roll it back from the chat.
     @Published private(set) var undoOfferVisible = false
+    /// Bumped by every recorded change. A chat bubble remembers the number it was created with and
+    /// only offers Undo while that is still the newest, which is exact - two identical labels ("Marked
+    /// a reminder done" twice) would otherwise let an old bubble undo the wrong thing.
+    @Published private(set) var undoGeneration = 0
 
     private var undoStack: [(label: String, notes: [Note])] = []
     private let undoDepth = 15
@@ -610,6 +614,7 @@ final class NotesStore: ObservableObject {
         notes = last.notes
         undoLabel = undoStack.last?.label
         undoOfferVisible = undoLabel != nil
+        undoGeneration += 1
         return last.label
     }
 
@@ -620,6 +625,7 @@ final class NotesStore: ObservableObject {
         if undoStack.count > undoDepth { undoStack.removeFirst() }
         undoLabel = label ?? "Changed a note"
         undoOfferVisible = true
+        undoGeneration += 1
         notes = next
     }
 
@@ -1201,7 +1207,7 @@ struct NotesListView: View {
         didTapAdd.toggle()
         let note = Note(title: "", body: "")
         notesStore.add(note, label: "Started a new note")
-        coordinator.reveal(noteID: note.id, in: notesStore, startEditing: true)
+        coordinator.reveal(noteID: note.id, in: notesStore, startEditing: true, isFresh: true)
     }
 
     private func toggleReminder(on note: Note) {
@@ -1630,8 +1636,10 @@ struct NoteDetailView: View {
         let emptyDraft = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if emptyDraft {
-            // Backing out of a brand-new note must not leave a blank "Untitled" behind.
-            if startInEditMode { notesStore.delete(ids: [noteID], label: "Discarded the empty note") }
+            // Backing out of a brand-new note must not leave a blank "Untitled" behind - but only of
+            // one the + button just made. This used to fire for any note opened in edit mode, so an
+            // existing note that happened to be empty was deleted underneath the user.
+            if route.isFresh { notesStore.delete(ids: [noteID], label: "Discarded the empty note") }
             return
         }
         // Saving on the way out. Losing typed text because Back was pressed instead of Save is the
@@ -1868,10 +1876,10 @@ struct ChatMessage: Identifiable, Equatable {
         /// with the literal word "Thinking…", so a reply that happened to start with that word looked
         /// like a request that would never finish.
         case waiting
-        /// `undoLabel` is what the change was called at the time. The bubble only offers Undo while
-        /// that is still the most recent change, otherwise undoing an answer from twenty messages ago
-        /// would quietly roll back whatever was edited last.
-        case actionResult(text: String, opened: OpenedNote?, failed: Bool, undoLabel: String?)
+        /// `undoGeneration` is the store's counter at the moment this bubble's change was applied.
+        /// Undo is offered only while that is still the newest change - matching on the label instead
+        /// would be fooled by two changes that happen to have the same wording.
+        case actionResult(text: String, opened: OpenedNote?, failed: Bool, undoGeneration: Int?)
         case confirmation(PendingConfirmation, answered: ConfirmationAnswer?)
         case sourcedAnswer(chips: [SourceNoteChip], segments: [ResolvedAnswerSegment])
     }
@@ -2078,7 +2086,7 @@ struct AskView: View {
         case .plainText(let text):
             ChatBubbleAssistantPlain(text: text)
 
-        case .actionResult(let text, let opened, let failed, let undoLabel):
+        case .actionResult(let text, let opened, let failed, let undoGeneration):
             VStack(alignment: .leading, spacing: 6) {
                 ChatBubbleAssistantPlain(text: text, tinted: failed)
                 HStack(spacing: 10) {
@@ -2094,7 +2102,7 @@ struct AskView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
-                    if let undoLabel, notesStore.undoLabel == undoLabel {
+                    if let undoGeneration, notesStore.undoGeneration == undoGeneration {
                         Button {
                             if let label = notesStore.undoLastChange() {
                                 coordinator.say("Undid: \(label)")
@@ -2573,7 +2581,7 @@ struct AskView: View {
                                                                 kind: .actionResult(text: result.reply,
                                                                                     opened: opened,
                                                                                     failed: result.isFailure,
-                                                                                    undoLabel: notesStore.undoLabel)))
+                                                                                    undoGeneration: notesStore.undoGeneration)))
             }
             if let pending = result.confirmation {
                 conversationHistory.append(ConversationTurn(role: "model", text: pending.question))
@@ -2767,6 +2775,8 @@ struct SettingsView: View {
                 }
             }
             .onAppear { keyDraft = settings.deepSeekAPIKey }
+            // A result line that survives the sheet reads like last week's import.
+            .onDisappear { statusMessage = nil }
             .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item]) { result in
                 inspectImport(result)
             }
@@ -3279,7 +3289,7 @@ struct SettingsView: View {
             }
         }
         // One write, so the whole import is a single entry on the Undo bar rather than N of them.
-        notesStore.replaceAll(merged, label: "Imported \(added) note(s)")
+        notesStore.replaceAll(merged, label: "Imported \(added) new\(replaced > 0 ? " and updated \(replaced)" : "") note\(added + replaced == 1 ? "" : "s")")
         importPreview = nil
         statusMessage = "Added \(added), replaced \(replaced)" + (keptNewer > 0 ? ", kept \(keptNewer) newer note(s) untouched" : "") + "."
         coordinator.say(statusMessage ?? "Import finished.", actionLabel: "Undo", undoes: true)
@@ -3721,6 +3731,7 @@ struct SahandInfoApp: App {
                     // so a reminder changed while offline still ends up correct.
                     reminders.configureOnce()
                     reminders.sync(with: notesStore.notes)
+                    reminders.clearBadge()
                     // "The app looks empty" is not how a damaged save file should announce itself.
                     if let recovery = notesStore.recoveryNotice {
                         coordinator.say(recovery, actionLabel: "Open Settings", opensSettings: true)

@@ -62,6 +62,7 @@ final class ReminderScheduler: ObservableObject {
     /// dropping whatever sort order happened to put last.
     private let systemLimit = 60
     private var didConfigure = false
+    private var lastScheduleSignature = ""
 
     private init() {}
 
@@ -143,6 +144,12 @@ final class ReminderScheduler: ObservableObject {
             return
         }
         let upcoming = notesWithFutureReminders
+        let signature = Self.signature(of: upcoming)
+        // Replacing the whole schedule on every write is what the app used to do on every keystroke
+        // in the editor. iOS drops requests when an app thrashes its own notification schedule, so an
+        // identical schedule is left alone rather than rebuilt and silently left shorter than before.
+        guard signature != lastScheduleSignature || scheduledCount != min(upcoming.count, systemLimit) else { return }
+        lastScheduleSignature = signature
         center.removeAllPendingNotificationRequests()
         for note in upcoming.prefix(systemLimit) {
             guard let date = note.reminderDate else { continue }
@@ -181,6 +188,14 @@ final class ReminderScheduler: ObservableObject {
     private func cancelAllKeepingCount() {
         center.removeAllPendingNotificationRequests()
         scheduledCount = 0
+        // Force the next pass to rebuild rather than be talked out of it by a matching signature.
+        lastScheduleSignature = ""
+    }
+
+    /// What the system schedule is derived from: id, time, and the text the banner will show.
+    private static func signature(of notes: [Note]) -> String {
+        notes.map { "\($0.id.uuidString):\(Int($0.reminderDate?.timeIntervalSince1970 ?? 0)):\($0.title)#\($0.previewText)" }
+            .joined(separator: "|")
     }
 
     func cancel(note id: UUID) {

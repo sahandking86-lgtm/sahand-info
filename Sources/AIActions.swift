@@ -254,6 +254,8 @@ enum AIActions {
                 result.isFailure = true
                 return result
             }
+            // The chip has to go too: counting every note while the list stayed filtered to one
+            // category is how "6 notes contain X" appeared above a list showing two.
             coordinator.categoryFilter = nil
             coordinator.searchText = query
             coordinator.selectedTab = .notes
@@ -482,6 +484,12 @@ enum AIActions {
         }
 
         guard !victims.isEmpty else {
+            if notes.isEmpty {
+                result.reply = "There's nothing to delete - your list is empty."
+                result.isFailure = true
+                result.outcomeForHistory = "[failed] asked to delete notes but the collection is empty"
+                return result
+            }
             let which = unmatched.isEmpty ? "that" : unmatched.joined(and: "and")
             result.reply = "I couldn't find \(which) among your \(notes.count) note\(notes.count == 1 ? "" : "s"), so nothing was deleted."
             result.isFailure = true

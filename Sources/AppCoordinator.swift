@@ -28,6 +28,10 @@ struct NoteRoute: Hashable {
     var highlightLine: String? = nil
     var theme: AppTheme? = nil
     var startEditing: Bool = false
+    /// True when the note was created by the + button for this editing session, so backing out of it
+    /// with nothing typed can delete it. Without this flag the same "throw away the empty draft" rule
+    /// also deleted a note that was already in your list and simply happened to be empty.
+    var isFresh: Bool = false
 }
 
 /// What a confirmation is for. Carried as data because re-reading the question text to work out
@@ -90,7 +94,13 @@ final class AppCoordinator: ObservableObject {
     /// user was looking at another tab when it happened.
     @Published private(set) var recentlyChanged: [UUID] = []
 
-    @Published var pendingConfirmation: PendingConfirmation? = nil
+    @Published var pendingConfirmation: PendingConfirmation? = nil {
+        didSet {
+            // Answering the card from the chat (or superseding it) has to take the "Review" banner
+            // with it, or the app nags about a decision that has already been made.
+            if pendingConfirmation == nil, notice?.goToAsk == true { dismissNotice() }
+        }
+    }
     @Published var notice: AppNotice? = nil
     /// Set when Settings should be presented; the Notes tab owns the sheet, and every other route
     /// to Settings (including the assistant) just flips this.
@@ -126,6 +136,7 @@ final class AppCoordinator: ObservableObject {
                 highlightLine: String? = nil,
                 theme: AppTheme? = nil,
                 startEditing: Bool = false,
+                isFresh: Bool = false,
                 flash: Bool = false) -> Bool {
         guard store.notes.contains(where: { $0.id == noteID }) else { return false }
 
@@ -152,7 +163,8 @@ final class AppCoordinator: ObservableObject {
                                highlight: highlight,
                                highlightLine: highlightLine,
                                theme: theme,
-                               startEditing: startEditing)]
+                               startEditing: startEditing,
+                               isFresh: isFresh)]
         scrollRequest = ScrollRequest(noteID: noteID)
         if flash { markChanged([noteID]) }
         return true
@@ -193,18 +205,21 @@ final class AppCoordinator: ObservableObject {
                                goToAsk: goToAsk, switchMode: switchMode, opensSettings: opensSettings)
         self.notice = notice
         noticeTask?.cancel()
-        // A notice with a button on it stays until it is used or dismissed. Auto-hiding after five
-        // seconds used to swallow the only "Undo" and the only "Review this change" that existed,
-        // because the timer did not care that a button was still attached.
-        guard notice.actionLabel != nil else {
-            noticeTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    if self?.notice?.id == notice.id { self?.notice = nil }
-                }
+        // How long a notice lives. Plain ones are a courtesy and fade in a few seconds; one with an
+        // "Undo" or a "Show" is the only way to reach that action, so it waits for you - and a
+        // "Review this change" outlives them all, because the decision is still outstanding.
+        // (5s on everything used to swallow the only Undo in the app.)
+        let seconds: UInt64
+        if notice.goToAsk { seconds = 0 }
+        else if notice.actionLabel != nil { seconds = 25 }
+        else { seconds = 5 }
+        guard seconds > 0 else { return }
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if self?.notice?.id == notice.id { self?.notice = nil }
             }
-            return
         }
     }
 
