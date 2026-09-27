@@ -551,6 +551,9 @@ enum AIProtocol {
         // stays inside its budget survives the very moment it has to be broken - otherwise the notice
         // that reports the clipping is itself what pushes the request over.
         let roomToSpare = min(max(0, budget - 160), 96)
+        // The marker is subtracted as well as added: a slice of exactly `room` characters plus the
+        // sentence saying it was cut is one sentence longer than the budget allowed.
+        let cutMark = "…(cut off by the size limit)"
         var out = ""
         var shown = 0
         for note in picked {
@@ -563,11 +566,10 @@ enum AIProtocol {
                 break
             }
             let body = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
-            let record = "\(titleOf(note)) [\(note.categoryEnglish.isEmpty ? "no category" : note.categoryEnglish)]: \(body.isEmpty ? "(no text in this note)" : body)"
-            // The marker is subtracted as well as added: a slice of exactly `room` characters plus the
-            // sentence saying it was cut is one sentence longer than the budget allowed.
-            let cutMark = "…(cut off by the size limit)"
-            if record.count > room { record = String(record.prefix(max(0, room - cutMark.count))) + cutMark }
+            let head = "\(titleOf(note)) [\(note.categoryEnglish.isEmpty ? "no category" : note.categoryEnglish)]: \(body.isEmpty ? "(no text in this note)" : body)"
+            let record = head.count > room
+                ? String(head.prefix(max(0, room - cutMark.count))) + cutMark
+                : head
             out += (out.isEmpty ? "" : "\n\n") + record
             shown += 1
         }
