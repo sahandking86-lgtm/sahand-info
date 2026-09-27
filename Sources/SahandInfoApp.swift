@@ -3696,8 +3696,9 @@ struct DateView: View {
         .opacity(note.isReminderCompleted ? 0.75 : 1)
         .animation(.snappy(duration: 0.3), value: note.isReminderCompleted)
         // The outline eases into its new colour when a reminder moves tier (finished, or something
-        // nearer came and went) instead of snapping.
-        .animation(.snappy(duration: 0.35), value: urgency(of: note))
+        // nearer came and went) instead of snapping. `urgency` is the local value: the row shadows
+        // the method name, so calling it again here would resolve to the tier, not a function.
+        .animation(.snappy(duration: 0.35), value: urgency)
     }
 
     private func toggleCompleted(_ note: Note) {
